@@ -1,0 +1,22 @@
+[package]
+name = "mocktide"
+version = "0.1.0"
+edition = "2021"
+description = "Mock tool for custom protocols."
+keywords = ["mock", "protocols", "tcp", "udp"]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+path = "src/main.rs"
+name = "mocktide"
+
+[dependencies]
+tokio = { version = "1.43", features = ["full"]}
+log = "0.4"
+env_logger = "0.11"
+anyhow= "1.0.95"
+bytes = "1.10"
+thiserror = "2"
+socket2 = "0.5"
