@@ -1,5 +1,5 @@
 # mocktide
-A file configurable mock server for testing network clients.
+A configurable mock server for testing network clients.
 
 **This is a working in progress!**
 

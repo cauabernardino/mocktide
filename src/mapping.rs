@@ -108,7 +108,7 @@ impl<'de> Deserialize<'de> for MappingFile {
         for (k, v) in helper.messages {
             // TODO: Access the need of using base64 encoding
             // let bytes = STANDARD.decode(&v).map_err(de::Error::custom)?;
-            messages.insert(k.clone(), Bytes::from(v));
+            messages.insert(k, Bytes::from(v));
         }
 
         Ok(MappingFile {
