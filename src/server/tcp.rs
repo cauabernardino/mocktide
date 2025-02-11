@@ -1,44 +1,40 @@
-use std::sync::Arc;
+use std::{future::Future, path::Path, sync::Arc};
 
-use log::{debug, error, info};
+use log::{error, info};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{broadcast, mpsc, Semaphore},
+    sync::{broadcast, Semaphore},
     time::{self, Duration},
 };
 
-use crate::connection::Connection;
-use crate::mapping::{Mapping, MappingDropGuard};
-use crate::message::Message;
-use crate::shutdown::Shutdown;
+use crate::{
+    connection::{Connection, MessageError},
+    mapping::{Action, Mapping, MappingGuard, MessageAction},
+};
 
 const MAX_CONNECTIONS: usize = 10;
 
 #[derive(Debug)]
 pub struct TcpServer {
-    mapping_guard: MappingDropGuard,
+    mapping_guard: MappingGuard,
     listener: TcpListener,
     limit_conns: Arc<Semaphore>,
     shutdown_channel: broadcast::Sender<()>,
-    // shutdown_complete_tx: mpsc::Sender<()>,
 }
 
 #[derive(Debug)]
 struct Handler {
     mapping: Mapping,
     conn: Connection,
-    shutdown: Shutdown,
-    // _shutdown_recv: mpsc::Sender<()>,
 }
 
 impl TcpServer {
-    pub fn new(listener: TcpListener) -> TcpServer {
+    pub fn new(listener: TcpListener, map_config_path: &Path) -> TcpServer {
         TcpServer {
-            mapping_guard: MappingDropGuard::new(),
+            mapping_guard: MappingGuard::new(map_config_path),
             listener,
             limit_conns: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
             shutdown_channel: broadcast::channel(1).0,
-            // shutdown_complete_tx: ,
         }
     }
     pub async fn run(&mut self) -> crate::Result<()> {
@@ -46,19 +42,16 @@ impl TcpServer {
 
         loop {
             let permit = self.limit_conns.clone().acquire_owned().await.unwrap();
-
             let socket = self.accept().await?;
 
             let mut handler = Handler {
                 mapping: self.mapping_guard.mapping(),
                 conn: Connection::new(socket),
-                shutdown: Shutdown::new(self.shutdown_channel.subscribe()),
-                // _shutdown_recv: self.shutdown_complete_tx.clone(),
             };
 
             tokio::spawn(async move {
                 if let Err(err) = handler.run().await {
-                    error!("connection error: {:}", err);
+                    error!("error: {:}", err);
                 }
 
                 drop(permit);
@@ -85,36 +78,52 @@ impl TcpServer {
     }
 }
 
+/// Handler handles the connection logic
 impl Handler {
-    async fn run(&mut self) -> crate::Result<()> {
-        while !self.shutdown.is_shutdown() {
-            let maybe_msg = tokio::select! {
-                res = self.conn.read_message() => res?,
-                _ = self.shutdown.recv() => {
-                    return Ok(());
+    async fn run(&mut self) -> Result<(), MessageError> {
+        for next_action in &self.mapping.state.message_actions {
+            let MessageAction {
+                message, action, ..
+            } = next_action;
+
+            let msg_value = &self.mapping.state.name_to_message[message];
+
+            match action {
+                Action::Send => self.conn.send(msg_value).await?,
+                Action::Recv => {
+                    let maybe_recv = self.conn.read_message(msg_value).await?;
+
+                    match maybe_recv {
+                        Some(_) => info!("message '{:}' was recv correctly", message),
+                        None => error!("message '{:}' was not recv correctly", message),
+                    };
                 }
+                Action::Unknown => unimplemented!(),
             };
-
-            let msg = match maybe_msg {
-                Some(msg) => msg,
-                None => return Ok(()),
-            };
-
-            reply(&self.mapping, &mut self.conn, &msg).await?;
         }
 
         Ok(())
     }
 }
 
-pub(crate) async fn reply(
-    _mapping: &Mapping,
-    dst: &mut Connection,
-    msg: &Message,
-) -> crate::Result<()> {
-    // mapping.set("test".to_string(), msg);
-    debug!("{:}", msg);
-    dst.write_message(msg).await?;
+/// Entry point for running the TCP server.
+pub async fn run_tcp_server(listener: TcpListener, map_config_path: &Path, shutdown: impl Future) {
+    let mut server = TcpServer::new(listener, map_config_path);
 
-    Ok(())
+    tokio::select! {
+        res = server.run() => {
+            if let Err(err) = res {
+                error!("{}", err);
+            }
+        }
+        _ = shutdown => {
+            info!("shutting down!");
+        }
+    }
+
+    let TcpServer {
+        shutdown_channel, ..
+    } = server;
+
+    drop(shutdown_channel);
 }

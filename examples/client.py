@@ -1,12 +1,15 @@
 import socket
 
-SERVER_HOST = '127.0.0.1'  # Server is running on localhost
-SERVER_PORT = 6000        # Port to connect to
+SERVER_HOST = '127.0.0.1'
+SERVER_PORT = 6000
 
-messages = [
-    b"+some data here\r\n",
-    b"+another data\r\n",
-    b"-12341241\r\n"
+send_messages = [
+    b"+hello world",
+    b"-123neg"
+]
+
+recv_messages = [
+    b"+some data",
 ]
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
@@ -14,9 +17,15 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
     client_socket.connect((SERVER_HOST, SERVER_PORT))
     print(f"Connected to server at {SERVER_HOST}:{SERVER_PORT}")
 
-    for msg in messages:
-        client_socket.sendall(msg)
-        print(f"Sent binary data: {msg}")
 
+    for msg in send_messages:
+        client_socket.sendall(msg)
+        print(f"send: {msg}")
+
+    for msg in recv_messages:
         response = client_socket.recv(1024)
-        print(f"Received response: {response}")
+
+        if msg == response:
+            print(f"recv: {response}")
+        else:
+            print(f"wrong response recv: {response}")
