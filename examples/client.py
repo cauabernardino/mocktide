@@ -1,4 +1,5 @@
 import socket
+import time
 
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 6000
@@ -19,10 +20,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
 
 
     for msg in send_messages:
+        time.sleep(1)
         client_socket.sendall(msg)
         print(f"send: {msg}")
 
     for msg in recv_messages:
+        time.sleep(1)
         response = client_socket.recv(1024)
 
         if msg == response:

@@ -35,12 +35,10 @@ impl Connection {
         }
     }
 
-    pub async fn read_message(
-        &mut self,
-        expected_message: &Bytes,
-    ) -> Result<Option<usize>, MessageError> {
+    /// Receives a message from the stream and checks if match with the one expected.
+    pub async fn recv(&mut self, expected_message: &Bytes) -> Result<Option<usize>, MessageError> {
         loop {
-            if let Some(len) = self.check_recv_message(expected_message)? {
+            if let Some(len) = self.check_recv(expected_message)? {
                 return Ok(Some(len));
             }
 
@@ -59,11 +57,8 @@ impl Connection {
         }
     }
 
-    fn check_recv_message(
-        &mut self,
-        expected_message: &Bytes,
-    ) -> Result<Option<usize>, MessageError> {
-        let mut buf_cursor = Cursor::new(&self.buffer[..]);
+    fn check_recv(&mut self, expected_message: &Bytes) -> Result<Option<usize>, MessageError> {
+        let buf_cursor = Cursor::new(&self.buffer[..]);
 
         let expected_len = expected_message.len();
         let buf_len = buf_cursor.get_ref().len();
@@ -76,14 +71,13 @@ impl Connection {
         debug!("expected: {:?}\trecv: {:?}", expected_message, recv);
 
         if *expected_message == recv.slice(..expected_len) {
-            buf_cursor.set_position(expected_len as u64);
             self.buffer = self.buffer.split_off(expected_len);
             return Ok(Some(expected_len));
         }
 
         Err(MessageError::NotEqual)
     }
-
+    /// Sends message to the stream.
     pub async fn send(&mut self, msg: &Bytes) -> Result<(), MessageError> {
         self.write_message(msg)
             .await

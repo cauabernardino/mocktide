@@ -1,6 +1,6 @@
 use std::{future::Future, path::Path, sync::Arc};
 
-use log::{error, info};
+use log::{debug, error, info};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{broadcast, Semaphore},
@@ -64,7 +64,10 @@ impl TcpServer {
 
         loop {
             match self.listener.accept().await {
-                Ok((socket, _)) => return Ok(socket),
+                Ok((socket, _)) => {
+                    debug!("connected: {:?}", &socket.peer_addr()?);
+                    return Ok(socket);
+                }
                 Err(err) => {
                     if backoff > 64 {
                         return Err(err.into());
@@ -91,7 +94,7 @@ impl Handler {
             match action {
                 Action::Send => self.conn.send(msg_value).await?,
                 Action::Recv => {
-                    let maybe_recv = self.conn.read_message(msg_value).await?;
+                    let maybe_recv = self.conn.recv(msg_value).await?;
 
                     match maybe_recv {
                         Some(_) => info!("message '{:}' was recv correctly", message),

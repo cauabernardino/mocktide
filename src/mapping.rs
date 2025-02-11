@@ -82,10 +82,9 @@ impl MappingState {
         let mut message_to_name: HashMap<Bytes, String> = HashMap::new();
 
         for (msg_name, msg_value) in &parsed.messages {
-            debug!("{:?}", msg_value);
-
             name_to_message.insert(msg_name.clone(), msg_value.clone());
             message_to_name.insert(msg_value.clone(), msg_name.clone());
+            debug!("mapped msg: {:#?}", msg_value);
         }
 
         debug!("parsed file: {:?}", parsed);
