@@ -2,7 +2,11 @@
 name = "mocktide"
 version = "0.1.0"
 edition = "2021"
+authors = ["Cauã Bernardino <cauabernardino@outlook.com>"]
+license = "MIT"
+readme = "README.md"
 description = "A configurable mock server for testing network clients."
+repository = "https://github.com/cauabernardino/mocktide"
 keywords = ["mock", "protocols", "tcp", "udp"]
 
 [lib]
