@@ -1,16 +1,16 @@
+"""Simulating a dummy protocol exchange"""
 import socket
-import time
 
 SERVER_HOST = '127.0.0.1'
-SERVER_PORT = 6000
+SERVER_PORT = 6020
 
 send_messages = [
-    b"+hello world",
-    b"-123neg"
+    bytes(b"+hello world"),
+    bytes(b"-123neg"),
 ]
 
 recv_messages = [
-    b"+some data",
+    bytes(b"+some data"),
 ]
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
@@ -20,12 +20,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
 
 
     for msg in send_messages:
-        time.sleep(1)
         client_socket.sendall(msg)
         print(f"send: {msg}")
 
     for msg in recv_messages:
-        time.sleep(1)
         response = client_socket.recv(1024)
 
         if msg == response:

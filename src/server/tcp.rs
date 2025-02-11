@@ -92,7 +92,7 @@ impl Handler {
             let msg_value = &self.mapping.state.name_to_message[message];
 
             match action {
-                Action::Send => self.conn.send(msg_value).await?,
+                Action::Send => self.conn.send(message, msg_value).await?,
                 Action::Recv => {
                     let maybe_recv = self.conn.recv(msg_value).await?;
 

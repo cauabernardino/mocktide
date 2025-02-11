@@ -1,0 +1,17 @@
+# Example of simple messages for the SBE protocol (litte-endian)
+messages:
+  heartbeat: "\x08\x00\x00\x00\x01\x00\x01\x00\x00\x00"
+  logon_req: "\x14\x00\x00\x00\x02\x00\x01\x00\x00\x00user1\x00pass1\x00\x39\x30\x00\x00"
+  logon_ack: "\x0C\x00\x00\x00\x03\x00\x01\x00\x00\x00\x01\x00\x39\x30\x00\x00" 
+
+actions:
+  - message: logon_req
+    action: Recv
+  - message: logon_ack
+    action: Send
+  - message: heartbeat
+    action: Recv
+  - message: heartbeat
+    action: Recv
+  - message: heartbeat
+    action: Recv

@@ -3,19 +3,22 @@ A file configurable mock server for testing network clients.
 
 **This is a working in progress!**
 
-Simplest usage example:
+Simplest usage example, of a SBE logon req/ack:
 ```bash
-# In one terminal
-$ RUST_LOG=debug cargo run
+# In one terminal, check options
+$ cargo run -- --help
+
+# Run the server
+$ cargo run -- -v examples/sbe.yaml
 
 # In another terminal
-$ python3 examples/client.py
+$ python3 examples/client_sbe.py
 ```
 
 ## TODOs
 
 - [x]  TCP server
-- [ ]  CLI
+- [x]  CLI
 - [ ]  Tests
 - [ ]  Sleep/wait logic
 - [ ]  Results output

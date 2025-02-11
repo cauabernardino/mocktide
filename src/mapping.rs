@@ -23,8 +23,6 @@ pub(crate) struct Mapping {
 #[derive(Debug)]
 pub(crate) struct MappingState {
     pub name_to_message: HashMap<String, Bytes>,
-    // TODO: Check necessity of having this
-    pub message_to_name: HashMap<Bytes, String>,
     pub message_actions: VecDeque<MessageAction>,
 }
 
@@ -34,7 +32,7 @@ struct MappingFile {
     actions: VecDeque<MessageAction>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct MessageAction {
     pub message: String,
     pub action: Action,
@@ -43,7 +41,7 @@ pub(crate) struct MessageAction {
     // pub wait_for: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) enum Action {
     Send,
     Recv,
@@ -79,18 +77,15 @@ impl MappingState {
             .with_context(|| "error parsing the mapping file")?;
 
         let mut name_to_message: HashMap<String, Bytes> = HashMap::new();
-        let mut message_to_name: HashMap<Bytes, String> = HashMap::new();
 
         for (msg_name, msg_value) in &parsed.messages {
             name_to_message.insert(msg_name.clone(), msg_value.clone());
-            message_to_name.insert(msg_value.clone(), msg_name.clone());
             debug!("mapped msg: {:#?}", msg_value);
         }
 
         debug!("parsed file: {:?}", parsed);
         Ok(MappingState {
             name_to_message,
-            message_to_name,
             message_actions: parsed.actions,
         })
     }
@@ -113,7 +108,7 @@ impl<'de> Deserialize<'de> for MappingFile {
         for (k, v) in helper.messages {
             // TODO: Access the need of using base64 encoding
             // let bytes = STANDARD.decode(&v).map_err(de::Error::custom)?;
-            messages.insert(k, Bytes::from(v));
+            messages.insert(k.clone(), Bytes::from(v));
         }
 
         Ok(MappingFile {

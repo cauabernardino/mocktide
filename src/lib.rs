@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod connection;
 pub mod mapping;
 pub mod server;

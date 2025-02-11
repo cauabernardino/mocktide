@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
-use log::debug;
+use log::{debug, info};
 use std::fmt;
 use std::io::{self, Cursor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
@@ -78,11 +78,11 @@ impl Connection {
         Err(MessageError::NotEqual)
     }
     /// Sends message to the stream.
-    pub async fn send(&mut self, msg: &Bytes) -> Result<(), MessageError> {
+    pub async fn send(&mut self, msg_name: &String, msg: &Bytes) -> Result<(), MessageError> {
         self.write_message(msg)
             .await
             .map_err(|_| MessageError::BufferError)?;
-        debug!("send: {:?}", msg);
+        info!("send '{:}': {:#?}", msg_name, msg);
 
         Ok(())
     }

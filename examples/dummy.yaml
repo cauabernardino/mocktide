@@ -6,7 +6,6 @@ messages:
 actions:
   - message: hello
     action: Recv
-    wait_for: some_data
   - message: neg
     action: Recv
   - message: some_data
