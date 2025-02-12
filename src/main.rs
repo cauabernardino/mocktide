@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     Builder::from_env(Env::default().default_filter_or(match args.verbose {
         0 => "info",
         1 => "debug",
-        2..=u8::MAX => "debug",
+        2..=u8::MAX => "debug", // TODO: Tracing
     }))
     .try_init()
     .with_context(|| "logger could not be initialized: {:#?}")?;
@@ -23,12 +23,12 @@ async fn main() -> Result<()> {
         return Err(anyhow!("file {:#?} does not exist", args.mapping_file));
     }
 
-    let host = "127.0.0.1";
-    let listener = TcpListener::bind(&format!("{}:{}", host, args.port))
+    let address = format!("{}:{}", &args.host, &args.port);
+    let listener = TcpListener::bind(&address)
         .await
-        .with_context(|| format!("error binding to {}", &args.port))?;
+        .with_context(|| format!("error binding to {}", &address))?;
 
-    info!("server will start in port {}", &args.port);
+    info!("server will start in address {}", &address);
     server::run_tcp_server(listener, args.mapping_file.as_path(), signal::ctrl_c()).await;
 
     Ok(())

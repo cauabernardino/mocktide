@@ -13,7 +13,11 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
+    /// Server host
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
     /// Server port
-    #[arg(short, long, default_value = "6020")]
+    #[arg(long, default_value = "6020")]
     pub port: u16,
 }
