@@ -7,10 +7,7 @@ use tokio::{
     time::{self, Duration},
 };
 
-use crate::{
-    connection::{Connection, MessageError},
-    mapping::{Action, Mapping, MappingGuard, MessageAction},
-};
+use crate::{connection::ConnHandler, mapping::MappingGuard};
 
 const MAX_CONNECTIONS: usize = 10;
 
@@ -20,12 +17,6 @@ pub struct TcpServer {
     listener: TcpListener,
     limit_conns: Arc<Semaphore>,
     shutdown_channel: broadcast::Sender<()>,
-}
-
-#[derive(Debug)]
-struct Handler {
-    mapping: Mapping,
-    conn: Connection,
 }
 
 impl TcpServer {
@@ -44,10 +35,7 @@ impl TcpServer {
             let permit = self.limit_conns.clone().acquire_owned().await.unwrap();
             let socket = self.accept().await?;
 
-            let mut handler = Handler {
-                mapping: self.mapping_guard.mapping(),
-                conn: Connection::new(socket),
-            };
+            let mut handler = ConnHandler::new(self.mapping_guard.mapping(), socket);
 
             tokio::spawn(async move {
                 if let Err(err) = handler.run().await {
@@ -78,34 +66,6 @@ impl TcpServer {
             time::sleep(Duration::from_secs(backoff)).await;
             backoff *= 2;
         }
-    }
-}
-
-/// Handler handles the connection logic
-impl Handler {
-    async fn run(&mut self) -> Result<(), MessageError> {
-        for next_action in &self.mapping.state.message_actions {
-            let MessageAction {
-                message, action, ..
-            } = next_action;
-
-            let msg_value = &self.mapping.state.name_to_message[message];
-
-            match action {
-                Action::Send => self.conn.send(message, msg_value).await?,
-                Action::Recv => {
-                    let maybe_recv = self.conn.recv(msg_value).await?;
-
-                    match maybe_recv {
-                        Some(_) => info!("message '{:}' was recv correctly", message),
-                        None => error!("message '{:}' was not recv correctly", message),
-                    };
-                }
-                Action::Unknown => unimplemented!(),
-            };
-        }
-
-        Ok(())
     }
 }
 

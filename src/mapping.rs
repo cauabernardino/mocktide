@@ -10,6 +10,8 @@ use std::{
     sync::Arc,
 };
 
+use tokio::sync::RwLock;
+
 #[derive(Debug)]
 pub(crate) struct MappingGuard {
     mapping: Mapping,
@@ -17,7 +19,7 @@ pub(crate) struct MappingGuard {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Mapping {
-    pub state: Arc<MappingState>,
+    pub state: Arc<RwLock<MappingState>>,
 }
 
 #[derive(Debug)]
@@ -63,7 +65,7 @@ impl MappingGuard {
 
 impl Mapping {
     pub(crate) fn new(config: &Path) -> Mapping {
-        let state = Arc::new(MappingState::from_file(config).unwrap());
+        let state = Arc::new(RwLock::new(MappingState::from_file(config).unwrap()));
 
         Mapping { state }
     }

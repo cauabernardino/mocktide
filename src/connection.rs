@@ -1,15 +1,25 @@
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
-use log::{debug, info};
+use log::{debug, error, info};
 use std::fmt;
 use std::io::{self, Cursor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 
+use crate::mapping::{Action, Mapping, MessageAction};
+
+/// Connection holds the interaction between server and peer
 #[derive(Debug)]
-pub struct Connection {
+pub(crate) struct Connection {
     stream: BufWriter<TcpStream>,
     buffer: BytesMut,
+}
+
+/// ConnHandler handles a single connection logic
+#[derive(Debug)]
+pub(crate) struct ConnHandler {
+    mapping: Mapping,
+    conn: Connection,
 }
 
 #[derive(Debug)]
@@ -68,7 +78,7 @@ impl Connection {
         if buf_len < expected_len {
             return Ok(None);
         }
-        debug!("expected: {:?}\trecv: {:?}", expected_message, recv);
+        debug!("expected: {:?}\tbuffer: {:?}", expected_message, recv);
 
         if *expected_message == recv.slice(..expected_len) {
             self.buffer = self.buffer.split_off(expected_len);
@@ -90,6 +100,39 @@ impl Connection {
     pub async fn write_message(&mut self, message: &Bytes) -> io::Result<()> {
         self.stream.write_all(message).await?;
         self.stream.flush().await
+    }
+}
+
+impl ConnHandler {
+    pub fn new(mapping: Mapping, socket: TcpStream) -> ConnHandler {
+        ConnHandler {
+            mapping,
+            conn: Connection::new(socket),
+        }
+    }
+
+    pub async fn run(&mut self) -> Result<(), MessageError> {
+        let mapping = self.mapping.state.try_read().unwrap();
+        for next_action in &mapping.message_actions {
+            let MessageAction { message, action } = next_action;
+
+            let msg_value = &mapping.name_to_message[message];
+
+            match action {
+                Action::Send => self.conn.send(message, msg_value).await?,
+                Action::Recv => {
+                    let maybe_recv = self.conn.recv(msg_value).await?;
+
+                    match maybe_recv {
+                        Some(_) => info!("message '{:}' was recv correctly", message),
+                        None => error!("message '{:}' was not recv correctly", message),
+                    };
+                }
+                Action::Unknown => unimplemented!(),
+            };
+        }
+
+        Ok(())
     }
 }
 
