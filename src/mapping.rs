@@ -29,7 +29,7 @@ pub(crate) struct MappingState {
 }
 
 #[derive(Debug)]
-struct MappingFile {
+pub struct MappingFile {
     messages: HashMap<String, Bytes>,
     actions: VecDeque<MessageAction>,
 }
@@ -117,5 +117,61 @@ impl<'de> Deserialize<'de> for MappingFile {
             messages,
             actions: helper.actions,
         })
+    }
+}
+
+impl PartialEq for Action {
+    fn eq(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (Action::Send, Action::Send)
+                | (Action::Recv, Action::Recv)
+                | (Action::Unknown, Action::Unknown),
+        )
+    }
+}
+
+impl PartialEq for MessageAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.message == other.message && self.action == other.action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static MAPPING_YAML: &str = r#"
+        messages:
+            msg1: "\x01\x02\x03"
+            msg2: "\x04\x05\x06"
+
+        actions:
+            - message: msg1
+              action: Send
+            - message: msg2
+              action: Recv
+    "#;
+
+    #[test]
+    fn yaml_file_is_correctly_deserialized() {
+        let test_parsed: MappingFile = serde_yaml::from_str(MAPPING_YAML).unwrap();
+
+        assert_eq!(test_parsed.messages["msg1"], Bytes::from("\x01\x02\x03"));
+        assert_eq!(test_parsed.messages["msg2"], Bytes::from("\x04\x05\x06"));
+        assert_eq!(
+            test_parsed.actions[0],
+            MessageAction {
+                message: "msg1".to_string(),
+                action: Action::Send
+            }
+        );
+        assert_eq!(
+            test_parsed.actions[1],
+            MessageAction {
+                message: "msg2".to_string(),
+                action: Action::Recv
+            }
+        );
     }
 }

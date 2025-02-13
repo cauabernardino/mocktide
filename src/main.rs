@@ -2,7 +2,10 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use env_logger::{Builder, Env};
 use log::info;
-use tokio::{net::TcpListener, signal};
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::signal;
+use tokio::sync::Notify;
 
 use mocktide::cli;
 use mocktide::server;
@@ -28,8 +31,13 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("error binding to {}", &address))?;
 
+    let notify = Arc::new(Notify::new());
+
     info!("server will start in address {}", &address);
-    server::run_tcp_server(listener, args.mapping_file.as_path(), signal::ctrl_c()).await;
+    tokio::select! {
+        _ = server::run_tcp_server(listener, args.mapping_file.as_path(), notify.clone()) => {}
+        _ = signal::ctrl_c() => { notify.notify_one(); info!("shutting down!"); }
+    }
 
     Ok(())
 }

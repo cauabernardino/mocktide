@@ -1,9 +1,9 @@
-use std::{future::Future, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use log::{debug, error, info};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{broadcast, Semaphore},
+    sync::{Notify, Semaphore},
     time::{self, Duration},
 };
 
@@ -16,7 +16,6 @@ pub struct TcpServer {
     mapping_guard: MappingGuard,
     listener: TcpListener,
     limit_conns: Arc<Semaphore>,
-    shutdown_channel: broadcast::Sender<()>,
 }
 
 impl TcpServer {
@@ -25,7 +24,6 @@ impl TcpServer {
             mapping_guard: MappingGuard::new(map_config_path),
             listener,
             limit_conns: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
-            shutdown_channel: broadcast::channel(1).0,
         }
     }
     pub async fn run(&mut self) -> crate::Result<()> {
@@ -70,7 +68,7 @@ impl TcpServer {
 }
 
 /// Entry point for running the TCP server.
-pub async fn run_tcp_server(listener: TcpListener, map_config_path: &Path, shutdown: impl Future) {
+pub async fn run_tcp_server(listener: TcpListener, map_config_path: &Path, notify: Arc<Notify>) {
     let mut server = TcpServer::new(listener, map_config_path);
 
     tokio::select! {
@@ -79,14 +77,7 @@ pub async fn run_tcp_server(listener: TcpListener, map_config_path: &Path, shutd
                 error!("{}", err);
             }
         }
-        _ = shutdown => {
-            info!("shutting down!");
-        }
+        // TODO: Does it need graceful shutdown?
+        _ = notify.notified() => {}
     }
-
-    let TcpServer {
-        shutdown_channel, ..
-    } = server;
-
-    drop(shutdown_channel);
 }
