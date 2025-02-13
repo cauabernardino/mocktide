@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     info!("server will start in address {}", &address);
     tokio::select! {
         _ = server::run_tcp_server(listener, args.mapping_file.as_path(), notify.clone()) => {}
-        _ = signal::ctrl_c() => { notify.notify_one(); info!("shutting down!"); }
+        _ = signal::ctrl_c() => { notify.notify_one() }
     }
 
     Ok(())

@@ -78,6 +78,6 @@ pub async fn run_tcp_server(listener: TcpListener, map_config_path: &Path, notif
             }
         }
         // TODO: Does it need graceful shutdown?
-        _ = notify.notified() => {}
+        _ = notify.notified() => { info!("shutting down!") }
     }
 }
