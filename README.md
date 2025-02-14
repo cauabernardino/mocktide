@@ -38,13 +38,19 @@ actions:
     action: Recv
   - message: third_msg
     action: Recv
+  - action: Shutdown
 ```
+
+Current actions:
+  - Send => server will the the mapped message
+  - Recv => server will wait for the mapped message
+  - Shutdown => server will shutdown, does not will require a mapped message
 
 ## TODOs
 
 - [x]  TCP server
 - [x]  CLI
-- [ ]  Tests
+- [x]  Tests (First test setup and CI)
 - [ ]  Sleep/wait logic
 - [ ]  Results output
 - [ ]  UDP server
