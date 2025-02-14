@@ -3,8 +3,10 @@ use bytes::{Bytes, BytesMut};
 use log::{debug, error, info};
 use std::fmt;
 use std::io::{self, Cursor};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
 
 use crate::mapping::{Action, Mapping, MessageAction};
 
@@ -111,14 +113,17 @@ impl ConnHandler {
         }
     }
 
-    pub async fn run(&mut self) -> Result<(), MessageError> {
+    pub async fn run(&mut self, notify: Arc<Notify>) -> Result<(), MessageError> {
         let mapping = self.mapping.state.try_read().unwrap();
         for next_action in &mapping.message_actions {
             let MessageAction { message, action } = next_action;
-
             let msg_value = &mapping.name_to_message[message];
 
             match action {
+                Action::Shutdown => {
+                    info!("notifying shutdown");
+                    notify.notify_waiters()
+                }
                 Action::Send => self.conn.send(message, msg_value).await?,
                 Action::Recv => {
                     let maybe_recv = self.conn.recv(msg_value).await?;
