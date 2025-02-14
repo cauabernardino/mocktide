@@ -1,0 +1,50 @@
+name: Cross platform tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    pull_requests:
+      types: [ opened, synchronize, reopened ]
+      branches:
+        - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: chache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: tests
+        if: matrix.os != 'windows-latest'
+        run: cargo test
+
+      - name: build 
+        run: cargo build
+ 
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Enforce formatting
+        run: cargo fmt --check
