@@ -1,8 +1,7 @@
 use anyhow::Context;
-// use base64::{engine::general_purpose::STANDARD, Engine};
 use bytes::Bytes;
 use log::debug;
-use serde::{Deserialize, Deserializer};
+use serde::{de, Deserialize, Deserializer};
 use std::{
     collections::{HashMap, VecDeque},
     fs,
@@ -36,6 +35,7 @@ pub struct MappingFile {
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct MessageAction {
+    #[serde(default)]
     pub message: String,
     pub action: Action,
     //TODO: Transform into sleep
@@ -43,10 +43,16 @@ pub(crate) struct MessageAction {
     // pub wait_for: String,
 }
 
+/// Defines actions the server can perform
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) enum Action {
+    /// Send a mapped message
     Send,
+    /// Receive a mapped message
     Recv,
+    /// Shutdown the server, closing all connections
+    Shutdown,
+    /// Placeholder
     Unknown,
 }
 
@@ -106,12 +112,22 @@ impl<'de> Deserialize<'de> for MappingFile {
 
         let helper = Helper::deserialize(deserializer)?;
 
+        for action in &helper.actions {
+            if action.message.is_empty() && action.action != Action::Shutdown {
+                return Err(de::Error::custom(format!(
+                    "Action {:?} requires a mapped message",
+                    action.action
+                )));
+            }
+        }
+
         let mut messages = HashMap::new();
         for (k, v) in helper.messages {
-            // TODO: Access the need of using base64 encoding
-            // let bytes = STANDARD.decode(&v).map_err(de::Error::custom)?;
             messages.insert(k, Bytes::from(v));
         }
+        // To not complicate even more the flow of ConnHandler,
+        // a null byte mapping for shutdown action
+        messages.insert("".to_string(), Bytes::from("\x00"));
 
         Ok(MappingFile {
             messages,
@@ -126,6 +142,7 @@ impl PartialEq for Action {
             (self, other),
             (Action::Send, Action::Send)
                 | (Action::Recv, Action::Recv)
+                | (Action::Shutdown, Action::Shutdown)
                 | (Action::Unknown, Action::Unknown),
         )
     }
@@ -139,6 +156,8 @@ impl PartialEq for MessageAction {
 
 #[cfg(test)]
 mod tests {
+    use claims::{assert_err, assert_ok};
+
     use super::*;
 
     static MAPPING_YAML: &str = r#"
@@ -153,25 +172,29 @@ mod tests {
               action: Recv
     "#;
 
-    #[test]
-    fn yaml_file_is_correctly_deserialized() {
-        let test_parsed: MappingFile = serde_yaml::from_str(MAPPING_YAML).unwrap();
+    static MAPPING_WRONG_YAML: &str = r#"
+        messages:
+            msg1: "\x01\x02\x03"
+            msg2: "\x04\x05\x06"
 
-        assert_eq!(test_parsed.messages["msg1"], Bytes::from("\x01\x02\x03"));
-        assert_eq!(test_parsed.messages["msg2"], Bytes::from("\x04\x05\x06"));
-        assert_eq!(
-            test_parsed.actions[0],
-            MessageAction {
-                message: "msg1".to_string(),
-                action: Action::Send
-            }
-        );
-        assert_eq!(
-            test_parsed.actions[1],
-            MessageAction {
-                message: "msg2".to_string(),
-                action: Action::Recv
-            }
-        );
+        actions:
+            - message: msg1
+              action: Send
+            - action: Recv
+    "#;
+
+    #[test]
+    fn test_yaml_file_is_correctly_deserialized() {
+        let parsed: Result<MappingFile, serde_yaml::Error> = serde_yaml::from_str(MAPPING_YAML);
+
+        assert_ok!(parsed);
+    }
+
+    #[test]
+    fn test_yaml_file_fails_to_serialize_action_without_a_mapped_msg() {
+        let parsed: Result<MappingFile, serde_yaml::Error> =
+            serde_yaml::from_str(MAPPING_WRONG_YAML);
+
+        assert_err!(parsed);
     }
 }

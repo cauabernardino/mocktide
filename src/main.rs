@@ -31,12 +31,15 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("error binding to {}", &address))?;
 
-    let notify = Arc::new(Notify::new());
-
     info!("server will start in address {}", &address);
+
+    let notify = Arc::new(Notify::new());
+    let notify_here = notify.clone();
+
     tokio::select! {
-        _ = server::run_tcp_server(listener, args.mapping_file.as_path(), notify.clone()) => {}
-        _ = signal::ctrl_c() => { notify.notify_one() }
+        _ = server::run_tcp_server(listener, args.mapping_file.as_path(), notify) => {}
+        _ = signal::ctrl_c() => { info!("server interrupted") }
+        _ = notify_here.notified() => { info!("server shutdown called") }
     }
 
     Ok(())

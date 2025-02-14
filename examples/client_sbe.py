@@ -29,6 +29,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         exit()
 
     for _ in range(3):
-        time.sleep(2)
+        time.sleep(1)
         client_socket.sendall(heartbeat)
         print(f"send: {heartbeat}")

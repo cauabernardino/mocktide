@@ -26,17 +26,18 @@ impl TcpServer {
             limit_conns: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         }
     }
-    pub async fn run(&mut self) -> crate::Result<()> {
+    pub async fn run(&mut self, notify: Arc<Notify>) -> crate::Result<()> {
         info!("accepting connections");
 
         loop {
             let permit = self.limit_conns.clone().acquire_owned().await.unwrap();
             let socket = self.accept().await?;
+            let loop_notify = notify.clone();
 
             let mut handler = ConnHandler::new(self.mapping_guard.mapping(), socket);
 
             tokio::spawn(async move {
-                if let Err(err) = handler.run().await {
+                if let Err(err) = handler.run(loop_notify).await {
                     error!("error: {:}", err);
                 }
 
@@ -71,13 +72,7 @@ impl TcpServer {
 pub async fn run_tcp_server(listener: TcpListener, map_config_path: &Path, notify: Arc<Notify>) {
     let mut server = TcpServer::new(listener, map_config_path);
 
-    tokio::select! {
-        res = server.run() => {
-            if let Err(err) = res {
-                error!("{}", err);
-            }
-        }
-        // TODO: Does it need graceful shutdown?
-        _ = notify.notified() => { info!("shutting down!") }
+    if let Err(err) = server.run(notify).await {
+        error!("{}", err);
     }
 }
