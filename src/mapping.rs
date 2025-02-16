@@ -5,7 +5,6 @@ use serde::{de, Deserialize, Deserializer};
 use std::{
     collections::{HashMap, VecDeque},
     fs,
-    path::Path,
     sync::Arc,
 };
 
@@ -23,12 +22,14 @@ pub(crate) struct Mapping {
 
 #[derive(Debug)]
 pub(crate) struct MappingState {
+    pub mapping_name: String,
     pub name_to_message: HashMap<String, Bytes>,
     pub message_actions: VecDeque<MessageAction>,
 }
 
 #[derive(Debug)]
 pub struct MappingFile {
+    name: String,
     messages: HashMap<String, Bytes>,
     actions: VecDeque<MessageAction>,
 }
@@ -61,7 +62,7 @@ pub(crate) enum Action {
 }
 
 impl MappingGuard {
-    pub(crate) fn new(config: &Path) -> MappingGuard {
+    pub(crate) fn new(config: String) -> MappingGuard {
         MappingGuard {
             mapping: Mapping::new(config),
         }
@@ -74,7 +75,7 @@ impl MappingGuard {
 }
 
 impl Mapping {
-    pub(crate) fn new(config: &Path) -> Mapping {
+    pub(crate) fn new(config: String) -> Mapping {
         let state = Arc::new(RwLock::new(MappingState::from_file(config).unwrap()));
 
         Mapping { state }
@@ -82,7 +83,7 @@ impl Mapping {
 }
 
 impl MappingState {
-    pub fn from_file(config_path: &Path) -> crate::Result<MappingState> {
+    pub fn from_file(config_path: String) -> crate::Result<MappingState> {
         let file_content = fs::read_to_string(config_path).unwrap();
 
         let parsed: MappingFile = serde_yaml::from_str(file_content.as_str())
@@ -97,6 +98,7 @@ impl MappingState {
 
         debug!("parsed file: {:?}", parsed);
         Ok(MappingState {
+            mapping_name: parsed.name,
             name_to_message,
             message_actions: parsed.actions,
         })
@@ -110,6 +112,7 @@ impl<'de> Deserialize<'de> for MappingFile {
     {
         #[derive(Deserialize)]
         struct Helper {
+            name: String,
             messages: HashMap<String, String>,
             actions: VecDeque<MessageAction>,
         }
@@ -134,6 +137,7 @@ impl<'de> Deserialize<'de> for MappingFile {
         messages.insert("".to_string(), Bytes::from("\x00"));
 
         Ok(MappingFile {
+            name: helper.name,
             messages,
             actions: helper.actions,
         })
@@ -165,6 +169,8 @@ mod tests {
     use super::*;
 
     static MAPPING_YAML: &str = r#"
+        name: good test
+
         messages:
             msg1: "\x01\x02\x03"
             msg2: "\x04\x05\x06"
@@ -177,6 +183,8 @@ mod tests {
     "#;
 
     static MAPPING_WRONG_YAML: &str = r#"
+        name: bad test
+
         messages:
             msg1: "\x01\x02\x03"
             msg2: "\x04\x05\x06"

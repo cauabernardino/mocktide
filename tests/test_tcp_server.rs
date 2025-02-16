@@ -4,7 +4,7 @@ use bytes::Bytes;
 use claims::assert_ok;
 use env_logger::{Builder, Env};
 use log::info;
-use mocktide::server::run_tcp_server;
+use mocktide::server::{run_tcp_server, ServerConfig};
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -13,6 +13,8 @@ use tokio::sync::Notify;
 fn create_mapping_file() -> NamedTempFile {
     use std::io::Write;
     let mapping: &str = r#"
+        name: hello
+
         messages:
             msg1: "\x48\x65\x6C\x6C\x6F"
 
@@ -35,14 +37,26 @@ struct TestServer {
 
 /// Spawn the server and returns the shutdown notifier for it
 async fn test_server() -> TestServer {
-    let file = create_mapping_file();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let shutdown_server = Arc::new(Notify::new());
+    let shutdown_notify = Arc::new(Notify::new());
 
-    let shutdown = shutdown_server.clone();
+    let shutdown = shutdown_notify.clone();
 
-    tokio::spawn(async move { run_tcp_server(listener, file.path(), shutdown_server).await });
+    tokio::spawn(async move {
+        let mapping_file = create_mapping_file();
+        let report_file = tempfile::NamedTempFile::new().unwrap();
+
+        let mapping_file_path = mapping_file.path().to_string_lossy().to_string();
+        let report_path = report_file.path().to_string_lossy().to_string();
+
+        let config = ServerConfig {
+            mapping_file_path,
+            report_path,
+            shutdown_notify,
+        };
+        run_tcp_server(listener, config).await
+    });
 
     TestServer { port, shutdown }
 }

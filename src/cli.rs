@@ -20,4 +20,8 @@ pub struct Cli {
     /// Server port
     #[arg(long, default_value = "6020")]
     pub port: u16,
+
+    /// JUnit report path
+    #[arg(short, long, default_value = "result.xml")]
+    pub report: PathBuf,
 }

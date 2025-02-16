@@ -7,12 +7,12 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::Notify;
 
-use mocktide::cli;
-use mocktide::server;
+use mocktide::cli::Cli;
+use mocktide::server::{run_tcp_server, ServerConfig};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = cli::Cli::parse();
+    let args = Cli::parse();
 
     Builder::from_env(Env::default().default_filter_or(match args.verbose {
         0 => "info",
@@ -36,8 +36,14 @@ async fn main() -> Result<()> {
     let notify = Arc::new(Notify::new());
     let notify_here = notify.clone();
 
+    let config = ServerConfig {
+        mapping_file_path: args.mapping_file.to_string_lossy().to_string(),
+        report_path: args.report.to_string_lossy().to_string(),
+        shutdown_notify: notify,
+    };
+
     tokio::select! {
-        _ = server::run_tcp_server(listener, args.mapping_file.as_path(), notify) => {}
+        _ = run_tcp_server(listener, config) => {}
         _ = signal::ctrl_c() => { info!("server interrupted") }
         _ = notify_here.notified() => { info!("server shutdown called") }
     }

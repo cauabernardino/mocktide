@@ -8,9 +8,10 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 
 use crate::mapping::{Action, Mapping, MessageAction};
+use crate::reporter::Reporter;
 
 /// Connection holds the interaction between server and peer
 #[derive(Debug)]
@@ -24,6 +25,7 @@ pub(crate) struct Connection {
 pub(crate) struct ConnHandler {
     mapping: Mapping,
     conn: Connection,
+    report_path: String,
 }
 
 #[derive(Debug)]
@@ -91,6 +93,7 @@ impl Connection {
 
         Err(MessageError::NotEqual)
     }
+
     /// Sends message to the stream.
     pub async fn send(&mut self, msg_name: &String, msg: &Bytes) -> Result<(), MessageError> {
         self.write_message(msg)
@@ -108,15 +111,19 @@ impl Connection {
 }
 
 impl ConnHandler {
-    pub fn new(mapping: Mapping, socket: TcpStream) -> ConnHandler {
+    pub fn new(mapping: Mapping, socket: TcpStream, report_path: String) -> ConnHandler {
         ConnHandler {
             mapping,
             conn: Connection::new(socket),
+            report_path,
         }
     }
 
     pub async fn run(&mut self, notify: Arc<Notify>) -> Result<(), MessageError> {
         let mapping = self.mapping.state.try_read().unwrap();
+
+        let mut reporter = Reporter::new(&mapping.mapping_name);
+
         for next_action in &mapping.message_actions {
             let MessageAction {
                 message,
@@ -124,6 +131,8 @@ impl ConnHandler {
                 wait_for,
             } = next_action;
             let msg_value = &mapping.name_to_message[message];
+
+            let start_action = Instant::now();
 
             if *wait_for != 0 {
                 info!("waiting for {} seconds", *wait_for);
@@ -137,16 +146,35 @@ impl ConnHandler {
                 }
                 Action::Send => self.conn.send(message, msg_value).await?,
                 Action::Recv => {
-                    let maybe_recv = self.conn.recv(msg_value).await?;
-
-                    match maybe_recv {
-                        Some(_) => info!("message '{:}' was recv correctly", message),
-                        None => error!("message '{:}' was not recv correctly", message),
+                    match self.conn.recv(msg_value).await {
+                        Ok(Some(_)) => {
+                            info!("message '{:}' was recv correctly", message);
+                            reporter.sucess(message, start_action.elapsed());
+                        }
+                        Ok(None) => {
+                            error!("message '{:}' was not recv correctly", message);
+                            reporter.failure(
+                                message,
+                                start_action.elapsed(),
+                                "recv_error",
+                                "message not recv correctly",
+                            );
+                        }
+                        Err(e) => {
+                            error!("{:}", e);
+                            reporter.error(
+                                message,
+                                start_action.elapsed(),
+                                "message_error",
+                                format!("{:}", e).as_str(),
+                            );
+                        }
                     };
                 }
                 Action::Unknown => unimplemented!(),
             };
         }
+        reporter.report(self.report_path.as_str());
 
         Ok(())
     }

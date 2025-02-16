@@ -1,3 +1,5 @@
+name: dummy test
+
 messages:
   hello: "+hello world"
   some_data: "+some data"
