@@ -35,12 +35,16 @@ pub struct MappingFile {
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct MessageAction {
+    /// Unique message name from mapping
     #[serde(default)]
     pub message: String,
+
+    /// Action to perform
     pub action: Action,
-    //TODO: Transform into sleep
-    // #[serde(default)]
-    // pub wait_for: String,
+
+    /// Optional waiting time, in seconds. Defaults to zero.
+    #[serde(default)]
+    pub wait_for: u64,
 }
 
 /// Defines actions the server can perform

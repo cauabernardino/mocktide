@@ -9,6 +9,7 @@ actions:
     action: Recv
   - message: logon_ack
     action: Send
+    wait_for: 2
   - message: heartbeat
     action: Recv
   - message: heartbeat
