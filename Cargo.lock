@@ -380,7 +380,6 @@ dependencies = [
  "env_logger",
  "junit-report",
  "log",
- "once_cell",
  "serde",
  "serde_bytes",
  "serde_yaml",

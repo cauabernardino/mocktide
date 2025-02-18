@@ -20,8 +20,8 @@ fn create_mapping_file() -> NamedTempFile {
 
         actions:
             - message: msg1
-              action: Recv
-            - action: Shutdown
+              execute: Recv
+            - execute: Shutdown
     "#;
 
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();

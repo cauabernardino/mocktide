@@ -46,21 +46,21 @@ messages:
   second_msg: "\x04\x03\x02\x01"
   third_msg: "\x01\x00\x00\x01"
 
-# Sequence of server actions (Send, Recv, Shutdown), binding a message to an action
+# Sequence of server actions (Send, Recv, Shutdown) to be executed
 actions:
-  - message: first_msg
-    action: Recv
-  - message: second_msg
-    action: Send
+  - execute: Recv
+    message: first_msg
+  - execute: Send
+    message: second_msg
     wait_for: 2  # You can set a waiting time for an action, in seconds
-  - message: third_msg
-    action: Recv
-  - message: third_msg
-    action: Recv
-  - action: Shutdown
+  - execute: Recv
+    message: third_msg
+  - execute: Recv
+    message: third_msg
+  - execute: Shutdown
 ```
 
-Current actions:
+Actions:
   - Send => server will send the mapped message
   - Recv => server will wait for the mapped message and validate it
   - Shutdown => server will shutdown, will not require a mapped message

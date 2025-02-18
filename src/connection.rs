@@ -127,7 +127,7 @@ impl ConnHandler {
         for next_action in &mapping.message_actions {
             let MessageAction {
                 message,
-                action,
+                execute,
                 wait_for,
             } = next_action;
             let msg_value = &mapping.name_to_message[message];
@@ -139,7 +139,7 @@ impl ConnHandler {
                 sleep(Duration::from_secs(*wait_for)).await;
             }
 
-            match action {
+            match execute {
                 Action::Shutdown => {
                     info!("notifying shutdown");
                     notify.notify_waiters()

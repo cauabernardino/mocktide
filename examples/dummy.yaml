@@ -6,9 +6,9 @@ messages:
   neg: "-123neg"
 
 actions:
-  - message: hello
-    action: Recv
-  - message: neg
-    action: Recv
-  - message: some_data
-    action: Send
+  - execute: Recv
+    message: hello
+  - execute: Recv
+    message: neg
+  - execute: Send
+    message: some_data

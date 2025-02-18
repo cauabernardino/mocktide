@@ -7,16 +7,16 @@ messages:
   logon_ack: "\x0C\x00\x00\x00\x03\x00\x01\x00\x00\x00\x01\x00\x39\x30\x00\x00" 
 
 actions:
-  - message: logon_req
-    action: Recv
-  - message: logon_ack
-    action: Send
+  - execute: Recv
+    message: logon_req
+  - execute: Send
+    message: logon_ack
     wait_for: 2
-  - message: heartbeat
-    action: Recv
+  - execute: Recv
+    message: heartbeat
     wait_for: 1
-  - message: heartbeat
-    action: Recv
-  - message: heartbeat
-    action: Recv
-  - action: Shutdown
+  - execute: Recv
+    message: heartbeat
+  - execute: Recv
+    message: heartbeat
+  - execute: Shutdown

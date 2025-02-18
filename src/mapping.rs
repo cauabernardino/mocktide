@@ -40,8 +40,8 @@ pub(crate) struct MessageAction {
     #[serde(default)]
     pub message: String,
 
-    /// Action to perform
-    pub action: Action,
+    /// Action to be executed
+    pub execute: Action,
 
     /// Optional waiting time, in seconds. Defaults to zero.
     #[serde(default)]
@@ -120,10 +120,10 @@ impl<'de> Deserialize<'de> for MappingFile {
         let helper = Helper::deserialize(deserializer)?;
 
         for action in &helper.actions {
-            if action.message.is_empty() && action.action != Action::Shutdown {
+            if action.message.is_empty() && action.execute != Action::Shutdown {
                 return Err(de::Error::custom(format!(
                     "Action {:?} requires a mapped message",
-                    action.action
+                    action.execute
                 )));
             }
         }
@@ -158,7 +158,7 @@ impl PartialEq for Action {
 
 impl PartialEq for MessageAction {
     fn eq(&self, other: &Self) -> bool {
-        self.message == other.message && self.action == other.action
+        self.message == other.message && self.execute == other.execute
     }
 }
 
@@ -177,9 +177,9 @@ mod tests {
 
         actions:
             - message: msg1
-              action: Send
+              execute: Send
             - message: msg2
-              action: Recv
+              execute: Recv
     "#;
 
     static MAPPING_WRONG_YAML: &str = r#"
@@ -191,8 +191,8 @@ mod tests {
 
         actions:
             - message: msg1
-              action: Send
-            - action: Recv
+              execute: Send
+            - execute: Recv
     "#;
 
     #[test]
