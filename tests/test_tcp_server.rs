@@ -90,11 +90,17 @@ async fn test_tcp_server_completes_expected_actions() {
     client.write_all(HELLO).await.unwrap();
     let mut reply = [0u8; 4];
     client.read_exact(&mut reply).await.unwrap();
-    assert_eq!(Bytes::copy_from_slice(&reply), Bytes::from_static(b"OK\x80\xFF"));
+    assert_eq!(
+        Bytes::copy_from_slice(&reply),
+        Bytes::from_static(b"OK\x80\xFF")
+    );
 
     let report = server.finished_report().await;
-    assert!(report.contains(r#"
-  <testsuite id="0" name="hello""#), "{report}");
+    // Indented: the suite starts on its own line
+    assert!(
+        report.contains("\n  <testsuite id=\"0\" name=\"hello\""),
+        "{report}"
+    );
     assert!(report.contains(r#"<testcase name="msg1""#), "{report}");
     assert!(!report.contains("<failure"), "{report}");
 }
@@ -125,8 +131,14 @@ async fn test_each_connection_gets_its_own_suite_in_one_report() {
     server.shutdown.cancel();
 
     let report = server.finished_report().await;
-    assert!(report.contains(r#"name="hello (connection 1)""#), "{report}");
-    assert!(report.contains(r#"name="hello (connection 2)""#), "{report}");
+    assert!(
+        report.contains(r#"name="hello (connection 1)""#),
+        "{report}"
+    );
+    assert!(
+        report.contains(r#"name="hello (connection 2)""#),
+        "{report}"
+    );
     assert_eq!(report.matches("<testcase").count(), 2, "{report}");
     assert!(!report.contains("<failure"), "{report}");
 }
