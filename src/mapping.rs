@@ -46,6 +46,14 @@ pub(crate) struct MessageAction {
     /// Optional waiting time, in seconds. Defaults to zero.
     #[serde(default)]
     pub wait_for: u64,
+
+    /// How long a `Recv` waits for its message, in seconds.
+    #[serde(default = "default_recv_timeout")]
+    pub timeout: u64,
+}
+
+fn default_recv_timeout() -> u64 {
+    30
 }
 
 /// Defines actions the server can perform
@@ -57,8 +65,6 @@ pub(crate) enum Action {
     Recv,
     /// Shutdown the server, closing all connections
     Shutdown,
-    /// Placeholder
-    Unknown,
 }
 
 impl MappingGuard {
@@ -120,10 +126,19 @@ impl<'de> Deserialize<'de> for MappingFile {
         let helper = Helper::deserialize(deserializer)?;
 
         for action in &helper.actions {
-            if action.message.is_empty() && action.execute != Action::Shutdown {
+            if action.execute == Action::Shutdown {
+                continue;
+            }
+            if action.message.is_empty() {
                 return Err(de::Error::custom(format!(
                     "Action {:?} requires a mapped message",
                     action.execute
+                )));
+            }
+            if !helper.messages.contains_key(&action.message) {
+                return Err(de::Error::custom(format!(
+                    "Action {:?} references unknown message '{}'",
+                    action.execute, action.message
                 )));
             }
         }
@@ -150,8 +165,7 @@ impl PartialEq for Action {
             (self, other),
             (Action::Send, Action::Send)
                 | (Action::Recv, Action::Recv)
-                | (Action::Shutdown, Action::Shutdown)
-                | (Action::Unknown, Action::Unknown),
+                | (Action::Shutdown, Action::Shutdown),
         )
     }
 }
@@ -200,6 +214,25 @@ mod tests {
         let parsed: Result<MappingFile, serde_yaml::Error> = serde_yaml::from_str(MAPPING_YAML);
 
         assert_ok!(parsed);
+    }
+
+    static MAPPING_UNKNOWN_MSG_YAML: &str = r#"
+        name: unknown message
+
+        messages:
+            msg1: "\x01\x02\x03"
+
+        actions:
+            - message: msg2
+              execute: Recv
+    "#;
+
+    #[test]
+    fn test_yaml_file_fails_to_deserialize_action_with_unknown_msg() {
+        let parsed: Result<MappingFile, serde_yaml::Error> =
+            serde_yaml::from_str(MAPPING_UNKNOWN_MSG_YAML);
+
+        assert_err!(parsed);
     }
 
     #[test]

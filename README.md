@@ -55,6 +55,7 @@ actions:
     wait_for: 2  # You can set a waiting time for an action, in seconds
   - execute: Recv
     message: third_msg
+    timeout: 5  # How long a Recv waits for its message, in seconds (default: 30)
   - execute: Recv
     message: third_msg
   - execute: Shutdown
@@ -64,6 +65,10 @@ Actions:
   - Send => server will send the mapped message
   - Recv => server will wait for the mapped message and validate it
   - Shutdown => server will shutdown, will not require a mapped message
+
+Actions stop at the first failure (mismatch, timeout or closed connection). Any
+remaining `Recv` is reported as skipped, and a remaining `Shutdown` still stops the
+server, so a failed run never leaves it hanging.
 
 ## Roadmap
 

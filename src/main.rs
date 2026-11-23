@@ -2,10 +2,9 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use env_logger::{Builder, Env};
 use log::info;
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use mocktide::cli::Cli;
 use mocktide::server::{run_tcp_server, ServerConfig};
@@ -26,27 +25,31 @@ async fn main() -> Result<()> {
         return Err(anyhow!("file {:#?} does not exist", args.mapping_file));
     }
 
-    let address = format!("{}:{}", &args.host, &args.port);
+    let address = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&address)
         .await
-        .with_context(|| format!("error binding to {}", &address))?;
+        .with_context(|| format!("error binding to {}", address))?;
 
-    info!("server will start in address {}", &address);
+    info!("server will start in address {}", address);
 
-    let notify = Arc::new(Notify::new());
-    let notify_here = notify.clone();
+    let shutdown = CancellationToken::new();
+
+    let interrupt = shutdown.clone();
+    tokio::spawn(async move {
+        if signal::ctrl_c().await.is_ok() {
+            info!("server interrupted");
+            interrupt.cancel();
+        }
+    });
 
     let config = ServerConfig {
         mapping_file_path: args.mapping_file.to_string_lossy().to_string(),
         report_path: args.report.to_string_lossy().to_string(),
-        shutdown_notify: notify,
+        shutdown,
     };
 
-    tokio::select! {
-        _ = run_tcp_server(listener, config) => {}
-        _ = signal::ctrl_c() => { info!("server interrupted") }
-        _ = notify_here.notified() => { info!("server shutdown called") }
-    }
+    run_tcp_server(listener, config).await;
+    info!("server stopped");
 
     Ok(())
 }

@@ -57,14 +57,21 @@ impl Reporter {
         self.test_suite.add_testcase(test_error);
     }
 
+    /// Creates a skipped test case in the current report
+    pub fn skipped(&mut self, name: &str) {
+        self.test_suite
+            .add_testcase(TestCaseBuilder::skipped(name).build());
+    }
+
     /// Dump the final report in XML format in given `output_path`
-    pub fn report(&mut self, output_path: &str) {
+    pub fn report(&mut self, output_path: &str) -> crate::Result<()> {
         let reporter = ReportBuilder::new()
             .add_testsuite(self.test_suite.clone())
             .build();
 
-        let mut output_file = File::create(output_path).unwrap();
-        reporter.write_xml(&mut output_file).unwrap();
+        let output_file = File::create(output_path)?;
+        reporter.write_xml(output_file)?;
+        Ok(())
     }
 
     /// Helper function to transfrom Duration from `tokio::time::Duration`
