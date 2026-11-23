@@ -14,35 +14,44 @@ pub(crate) struct Mapping {
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct MessageAction {
-    /// Unique message name from mapping
-    #[serde(default)]
-    pub message: String,
-
-    /// Action to be executed
+    /// Action to be executed, with its own fields
+    #[serde(flatten)]
     pub execute: Action,
 
     /// Optional waiting time, in seconds. Defaults to zero.
     #[serde(default)]
     pub wait_for: u64,
+}
 
-    /// How long a `Recv` waits for its message, in seconds.
-    #[serde(default = "default_recv_timeout")]
-    pub timeout: u64,
+/// Defines actions the server can perform, selected by the `execute` field
+#[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "execute")]
+pub(crate) enum Action {
+    /// Send a mapped message
+    Send { message: String },
+    /// Receive a mapped message
+    Recv {
+        message: String,
+        /// How long to wait for the message, in seconds
+        #[serde(default = "default_recv_timeout")]
+        timeout: u64,
+    },
+    /// Shutdown the server, closing all connections
+    Shutdown,
 }
 
 fn default_recv_timeout() -> u64 {
     30
 }
 
-/// Defines actions the server can perform
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Action {
-    /// Send a mapped message
-    Send,
-    /// Receive a mapped message
-    Recv,
-    /// Shutdown the server, closing all connections
-    Shutdown,
+impl Action {
+    /// Name of the mapped message this action uses, if any
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Action::Send { message } | Action::Recv { message, .. } => Some(message),
+            Action::Shutdown => None,
+        }
+    }
 }
 
 impl Mapping {
@@ -72,20 +81,10 @@ impl<'de> Deserialize<'de> for Mapping {
 
         let helper = Helper::deserialize(deserializer)?;
 
-        for action in &helper.actions {
-            if action.execute == Action::Shutdown {
-                continue;
-            }
-            if action.message.is_empty() {
+        for message in helper.actions.iter().filter_map(|a| a.execute.message()) {
+            if !helper.messages.contains_key(message) {
                 return Err(de::Error::custom(format!(
-                    "Action {:?} requires a mapped message",
-                    action.execute
-                )));
-            }
-            if !helper.messages.contains_key(&action.message) {
-                return Err(de::Error::custom(format!(
-                    "Action {:?} references unknown message '{}'",
-                    action.execute, action.message
+                    "action references unknown message '{message}'"
                 )));
             }
         }
@@ -101,9 +100,6 @@ impl<'de> Deserialize<'de> for Mapping {
             })?;
             messages.insert(name, bytes);
         }
-        // To not complicate even more the flow of ConnHandler,
-        // a null byte mapping for shutdown action
-        messages.insert("".to_string(), Bytes::from("\x00"));
 
         Ok(Mapping {
             name: helper.name,

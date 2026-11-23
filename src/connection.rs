@@ -101,25 +101,21 @@ impl ConnHandler {
         let mut actions = mapping.actions.iter();
         let mut shutdown_requested = false;
 
-        for action in actions.by_ref() {
-            let MessageAction {
-                message, execute, ..
-            } = action;
-
+        for MessageAction { execute, wait_for } in actions.by_ref() {
             let step = async {
-                if action.wait_for != 0 {
-                    info!("waiting for {} seconds", action.wait_for);
-                    time::sleep(Duration::from_secs(action.wait_for)).await;
+                if *wait_for != 0 {
+                    info!("waiting for {} seconds", wait_for);
+                    time::sleep(Duration::from_secs(*wait_for)).await;
                 }
                 let start = Instant::now();
-                let result = perform(conn, action, &mapping.messages[message]).await;
+                let result = perform(conn, mapping, execute).await;
                 (result, start.elapsed())
             };
 
             let (result, elapsed) = tokio::select! {
                 _ = shutdown.cancelled() => {
                     info!("server shutting down, aborting remaining actions");
-                    if *execute == Action::Recv {
+                    if let Action::Recv { message, .. } = execute {
                         reporter.skipped(message);
                     }
                     break;
@@ -132,22 +128,22 @@ impl ConnHandler {
                     shutdown_requested = true;
                     break;
                 }
-                (Action::Send, Ok(())) => {}
-                (Action::Recv, Ok(())) => {
+                (Action::Send { .. }, Ok(())) => {}
+                (Action::Recv { message, .. }, Ok(())) => {
                     info!("message '{:}' was recv correctly", message);
                     reporter.success(message, elapsed);
                 }
-                (Action::Send, Err(err)) => {
+                (Action::Send { message }, Err(err)) => {
                     error!("failed to send '{:}': {:}", message, err);
                     reporter.error(message, elapsed, "send_error", &err.to_string());
                     break;
                 }
-                (Action::Recv, Err(MessageError::Io(err))) => {
+                (Action::Recv { message, .. }, Err(MessageError::Io(err))) => {
                     error!("failed to recv '{:}': {:}", message, err);
                     reporter.error(message, elapsed, "recv_error", &err.to_string());
                     break;
                 }
-                (Action::Recv, Err(err)) => {
+                (Action::Recv { message, .. }, Err(err)) => {
                     error!("message '{:}' was not recv correctly: {:}", message, err);
                     reporter.failure(message, elapsed, err.kind(), &err.to_string());
                     break;
@@ -155,11 +151,11 @@ impl ConnHandler {
             }
         }
 
-        for action in actions {
-            match action.execute {
-                Action::Recv => reporter.skipped(&action.message),
+        for MessageAction { execute, .. } in actions {
+            match execute {
+                Action::Recv { message, .. } => reporter.skipped(message),
                 Action::Shutdown => shutdown_requested = true,
-                Action::Send => {}
+                Action::Send { .. } => {}
             }
         }
 
@@ -174,14 +170,17 @@ impl ConnHandler {
 
 async fn perform(
     conn: &mut Connection,
-    action: &MessageAction,
-    msg: &Bytes,
+    mapping: &Mapping,
+    action: &Action,
 ) -> Result<(), MessageError> {
-    match action.execute {
-        Action::Send => conn.send(&action.message, msg).await,
-        Action::Recv => time::timeout(Duration::from_secs(action.timeout), conn.recv(msg))
-            .await
-            .map_err(|_| MessageError::Timeout)?,
+    match action {
+        Action::Send { message } => conn.send(message, &mapping.messages[message]).await,
+        Action::Recv { message, timeout } => {
+            let expected = &mapping.messages[message];
+            time::timeout(Duration::from_secs(*timeout), conn.recv(expected))
+                .await
+                .map_err(|_| MessageError::Timeout)?
+        }
         Action::Shutdown => Ok(()),
     }
 }
