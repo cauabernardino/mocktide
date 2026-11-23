@@ -1,0 +1,26 @@
+# Several clients sharing one server. Every connection runs the actions below
+# and gets its own test suite in a single report.
+name: multi client session
+
+messages:
+  hello: "HELLO\n"
+  welcome: "WELCOME\n"
+  ping: "PING\n"
+  pong: "PONG\n"
+  bye: "BYE\n"
+
+actions:
+  - execute: Recv
+    message: hello
+  - execute: Send
+    message: welcome
+  - execute: Recv
+    message: ping
+  - execute: Send
+    message: pong
+  - execute: Recv
+    message: bye
+  # The first connection to get here stops the server after the wait, which
+  # gives the other connections time to finish their own exchange.
+  - execute: Shutdown
+    wait_for: 2

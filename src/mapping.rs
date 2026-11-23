@@ -2,45 +2,20 @@ use anyhow::Context;
 use bytes::Bytes;
 use log::debug;
 use serde::{de, Deserialize, Deserializer};
-use std::{
-    collections::{HashMap, VecDeque},
-    fs,
-    sync::Arc,
-};
+use std::{collections::HashMap, fs};
 
-use tokio::sync::RwLock;
-
+/// A parsed mapping file: the messages and the actions every connection runs through.
 #[derive(Debug)]
-pub(crate) struct MappingGuard {
-    mapping: Mapping,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct Mapping {
-    pub state: Arc<RwLock<MappingState>>,
-}
-
-#[derive(Debug)]
-pub(crate) struct MappingState {
-    pub mapping_name: String,
-    pub name_to_message: HashMap<String, Bytes>,
-    pub message_actions: VecDeque<MessageAction>,
-}
-
-#[derive(Debug)]
-pub struct MappingFile {
-    name: String,
-    messages: HashMap<String, Bytes>,
-    actions: VecDeque<MessageAction>,
+    pub name: String,
+    pub messages: HashMap<String, Bytes>,
+    pub actions: Vec<MessageAction>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct MessageAction {
-    /// Unique message name from mapping
-    #[serde(default)]
-    pub message: String,
-
-    /// Action to be executed
+    /// Action to be executed, with its own fields
+    #[serde(flatten)]
     pub execute: Action,
 
     /// Optional waiting time, in seconds. Defaults to zero.
@@ -48,64 +23,51 @@ pub(crate) struct MessageAction {
     pub wait_for: u64,
 }
 
-/// Defines actions the server can perform
+/// Defines actions the server can perform, selected by the `execute` field
 #[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "execute")]
 pub(crate) enum Action {
     /// Send a mapped message
-    Send,
+    Send { message: String },
     /// Receive a mapped message
-    Recv,
+    Recv {
+        message: String,
+        /// How long to wait for the message, in seconds
+        #[serde(default = "default_recv_timeout")]
+        timeout: u64,
+    },
     /// Shutdown the server, closing all connections
     Shutdown,
-    /// Placeholder
-    Unknown,
 }
 
-impl MappingGuard {
-    pub(crate) fn new(config: String) -> MappingGuard {
-        MappingGuard {
-            mapping: Mapping::new(config),
-        }
-    }
+fn default_recv_timeout() -> u64 {
+    30
+}
 
-    /// Gets underlying mapping, increasing its reference count.
-    pub(crate) fn mapping(&self) -> Mapping {
-        self.mapping.clone()
+impl Action {
+    /// Name of the mapped message this action uses, if any
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Action::Send { message } | Action::Recv { message, .. } => Some(message),
+            Action::Shutdown => None,
+        }
     }
 }
 
 impl Mapping {
-    pub(crate) fn new(config: String) -> Mapping {
-        let state = Arc::new(RwLock::new(MappingState::from_file(config).unwrap()));
+    pub fn from_file(path: &str) -> crate::Result<Mapping> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("could not read mapping file '{path}'"))?;
 
-        Mapping { state }
+        let mapping: Mapping = serde_yaml_ng::from_str(&content)
+            .with_context(|| format!("error parsing mapping file '{path}'"))?;
+
+        debug!("parsed mapping: {:#?}", mapping);
+        Ok(mapping)
     }
 }
 
-impl MappingState {
-    pub fn from_file(config_path: String) -> crate::Result<MappingState> {
-        let file_content = fs::read_to_string(config_path).unwrap();
-
-        let parsed: MappingFile = serde_yaml::from_str(file_content.as_str())
-            .with_context(|| "error parsing the mapping file")?;
-
-        let mut name_to_message: HashMap<String, Bytes> = HashMap::new();
-
-        for (msg_name, msg_value) in &parsed.messages {
-            name_to_message.insert(msg_name.clone(), msg_value.clone());
-            debug!("mapped msg: {:#?}", msg_value);
-        }
-
-        debug!("parsed file: {:?}", parsed);
-        Ok(MappingState {
-            mapping_name: parsed.name,
-            name_to_message,
-            message_actions: parsed.actions,
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for MappingFile {
+impl<'de> Deserialize<'de> for Mapping {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -114,29 +76,32 @@ impl<'de> Deserialize<'de> for MappingFile {
         struct Helper {
             name: String,
             messages: HashMap<String, String>,
-            actions: VecDeque<MessageAction>,
+            actions: Vec<MessageAction>,
         }
 
         let helper = Helper::deserialize(deserializer)?;
 
-        for action in &helper.actions {
-            if action.message.is_empty() && action.execute != Action::Shutdown {
+        for message in helper.actions.iter().filter_map(|a| a.execute.message()) {
+            if !helper.messages.contains_key(message) {
                 return Err(de::Error::custom(format!(
-                    "Action {:?} requires a mapped message",
-                    action.execute
+                    "action references unknown message '{message}'"
                 )));
             }
         }
 
         let mut messages = HashMap::new();
-        for (k, v) in helper.messages {
-            messages.insert(k, Bytes::from(v));
+        for (name, value) in helper.messages {
+            let bytes = to_bytes(&value).map_err(|c| {
+                de::Error::custom(format!(
+                    "message '{name}' contains '{c}' (U+{:04X}), which does not fit in a byte; \
+                     write binary data as \\xNN escapes",
+                    c as u32
+                ))
+            })?;
+            messages.insert(name, bytes);
         }
-        // To not complicate even more the flow of ConnHandler,
-        // a null byte mapping for shutdown action
-        messages.insert("".to_string(), Bytes::from("\x00"));
 
-        Ok(MappingFile {
+        Ok(Mapping {
             name: helper.name,
             messages,
             actions: helper.actions,
@@ -144,22 +109,14 @@ impl<'de> Deserialize<'de> for MappingFile {
     }
 }
 
-impl PartialEq for Action {
-    fn eq(&self, other: &Self) -> bool {
-        matches!(
-            (self, other),
-            (Action::Send, Action::Send)
-                | (Action::Recv, Action::Recv)
-                | (Action::Shutdown, Action::Shutdown)
-                | (Action::Unknown, Action::Unknown),
-        )
-    }
-}
-
-impl PartialEq for MessageAction {
-    fn eq(&self, other: &Self) -> bool {
-        self.message == other.message && self.execute == other.execute
-    }
+/// Maps each character to the byte with the same value, so a YAML `"\x80"` is the
+/// byte 0x80 rather than its UTF-8 encoding. Returns the first character above U+00FF.
+fn to_bytes(value: &str) -> Result<Bytes, char> {
+    value
+        .chars()
+        .map(|c| u8::try_from(c).map_err(|_| c))
+        .collect::<Result<Vec<u8>, char>>()
+        .map(Bytes::from)
 }
 
 #[cfg(test)]
@@ -196,16 +153,71 @@ mod tests {
     "#;
 
     #[test]
+    fn test_escapes_above_ascii_map_to_single_bytes() {
+        let parsed: Mapping = serde_yaml_ng::from_str(
+            r#"
+            name: bytes
+            messages:
+                binary: "\x00\x7F\x80\xFF"
+                text: "+hello"
+            actions:
+                - message: binary
+                  execute: Send
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.messages["binary"][..], [0x00, 0x7F, 0x80, 0xFF]);
+        assert_eq!(parsed.messages["text"][..], *b"+hello");
+    }
+
+    #[test]
+    fn test_characters_that_do_not_fit_a_byte_are_rejected() {
+        let parsed: Result<Mapping, serde_yaml_ng::Error> = serde_yaml_ng::from_str(
+            r#"
+            name: euro
+            messages:
+                price: "10\u20AC"
+            actions:
+                - message: price
+                  execute: Send
+            "#,
+        );
+
+        let err = parsed.unwrap_err().to_string();
+        assert!(err.contains("price"), "{err}");
+    }
+
+    #[test]
     fn test_yaml_file_is_correctly_deserialized() {
-        let parsed: Result<MappingFile, serde_yaml::Error> = serde_yaml::from_str(MAPPING_YAML);
+        let parsed: Result<Mapping, serde_yaml_ng::Error> = serde_yaml_ng::from_str(MAPPING_YAML);
 
         assert_ok!(parsed);
     }
 
+    static MAPPING_UNKNOWN_MSG_YAML: &str = r#"
+        name: unknown message
+
+        messages:
+            msg1: "\x01\x02\x03"
+
+        actions:
+            - message: msg2
+              execute: Recv
+    "#;
+
+    #[test]
+    fn test_yaml_file_fails_to_deserialize_action_with_unknown_msg() {
+        let parsed: Result<Mapping, serde_yaml_ng::Error> =
+            serde_yaml_ng::from_str(MAPPING_UNKNOWN_MSG_YAML);
+
+        assert_err!(parsed);
+    }
+
     #[test]
     fn test_yaml_file_fails_to_serialize_action_without_a_mapped_msg() {
-        let parsed: Result<MappingFile, serde_yaml::Error> =
-            serde_yaml::from_str(MAPPING_WRONG_YAML);
+        let parsed: Result<Mapping, serde_yaml_ng::Error> =
+            serde_yaml_ng::from_str(MAPPING_WRONG_YAML);
 
         assert_err!(parsed);
     }

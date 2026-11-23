@@ -1,67 +1,92 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use log::{debug, error, info};
+use junit_report::TestSuite;
+use log::{debug, info};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Semaphore,
     time::{self, Duration},
 };
+use tokio_util::task::TaskTracker;
 
-use crate::{connection::ConnHandler, mapping::MappingGuard};
+use crate::{connection::ConnHandler, mapping::Mapping, reporter};
 
 use super::ServerConfig;
 
-const MAX_CONNECTIONS: usize = 10;
-
 #[derive(Debug)]
 pub struct TcpServer {
-    mapping_guard: MappingGuard,
+    mapping: Arc<Mapping>,
     listener: TcpListener,
     limit_conns: Arc<Semaphore>,
+    connections: TaskTracker,
+    /// Finished connection suites, keyed by accept order
+    suites: Arc<Mutex<Vec<(usize, TestSuite)>>>,
     config: ServerConfig,
 }
 
 impl TcpServer {
-    pub fn new(listener: TcpListener, config: ServerConfig) -> TcpServer {
-        TcpServer {
-            mapping_guard: MappingGuard::new(config.mapping_file_path.clone()),
+    /// Fails if the mapping file cannot be read or is invalid.
+    pub fn new(listener: TcpListener, config: ServerConfig) -> crate::Result<TcpServer> {
+        Ok(TcpServer {
+            mapping: Arc::new(Mapping::from_file(&config.mapping_file_path)?),
             listener,
-            limit_conns: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+            limit_conns: Arc::new(Semaphore::new(config.max_connections.get())),
+            connections: TaskTracker::new(),
+            suites: Arc::default(),
             config,
-        }
+        })
     }
 
-    pub async fn run(&mut self) -> crate::Result<()> {
-        info!("accepting connections");
+    /// Accepts connections until shutdown, waits for in-flight connections to
+    /// finish, then writes the report with every connection's results.
+    pub async fn run(&self) -> crate::Result<()> {
+        info!("accepting connections on {}", self.listener.local_addr()?);
 
+        let result = tokio::select! {
+            _ = self.config.shutdown.cancelled() => Ok(()),
+            result = self.accept_loop() => result,
+        };
+
+        self.connections.close();
+        self.connections.wait().await;
+
+        let report = self.write_report();
+        result.and(report)
+    }
+
+    async fn accept_loop(&self) -> crate::Result<()> {
+        let mut next_index = 0;
         loop {
-            let permit = self.limit_conns.clone().acquire_owned().await.unwrap();
+            let permit = self
+                .limit_conns
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore is never closed");
             let socket = self.accept().await?;
-            let loop_notify = self.config.shutdown_notify.clone();
 
-            let mut handler = ConnHandler::new(
-                self.mapping_guard.mapping(),
-                socket,
-                self.config.report_path.clone(),
-            );
+            let index = next_index;
+            next_index += 1;
 
-            tokio::spawn(async move {
-                if let Err(err) = handler.run(loop_notify).await {
-                    error!("error: {:}", err);
-                }
+            let mut handler = ConnHandler::new(self.mapping.clone(), socket);
+            let shutdown = self.config.shutdown.clone();
+            let suites = self.suites.clone();
 
+            self.connections.spawn(async move {
+                let suite = handler.run(shutdown).await;
+                suites.lock().unwrap().push((index, suite));
                 drop(permit);
             });
         }
     }
 
-    async fn accept(&mut self) -> crate::Result<TcpStream> {
+    async fn accept(&self) -> crate::Result<TcpStream> {
         let mut backoff = 1;
 
         loop {
             match self.listener.accept().await {
-                Ok((socket, _)) => {
-                    debug!("connected: {:?}", &socket.peer_addr()?);
+                Ok((socket, peer)) => {
+                    debug!("connected: {peer}");
                     return Ok(socket);
                 }
                 Err(err) => {
@@ -75,13 +100,19 @@ impl TcpServer {
             backoff *= 2;
         }
     }
+
+    fn write_report(&self) -> crate::Result<()> {
+        let mut finished = std::mem::take(&mut *self.suites.lock().unwrap());
+        finished.sort_by_key(|(index, _)| *index);
+        let suites = finished.into_iter().map(|(_, suite)| suite).collect();
+
+        info!("writing report to '{}'", self.config.report_path);
+        reporter::write_report(&self.config.report_path, suites)
+    }
 }
 
-/// Entry point for running the TCP server.
-pub async fn run_tcp_server(listener: TcpListener, config: ServerConfig) {
-    let mut server = TcpServer::new(listener, config);
-
-    if let Err(err) = server.run().await {
-        error!("{}", err);
-    }
+/// Entry point for running the TCP server. Returns once shutdown is requested,
+/// all connections have finished and the report is written.
+pub async fn run_tcp_server(listener: TcpListener, config: ServerConfig) -> crate::Result<()> {
+    TcpServer::new(listener, config)?.run().await
 }

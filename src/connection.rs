@@ -1,14 +1,14 @@
-use anyhow::anyhow;
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
+use junit_report::TestSuite;
 use log::{debug, error, info};
 use std::fmt;
-use std::io::{self, Cursor};
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
-use tokio::sync::Notify;
-use tokio::time::{sleep, Instant};
+use tokio::time::{self, Instant};
+use tokio_util::sync::CancellationToken;
 
 use crate::mapping::{Action, Mapping, MessageAction};
 use crate::reporter::Reporter;
@@ -23,24 +23,23 @@ pub(crate) struct Connection {
 /// ConnHandler handles a single connection logic
 #[derive(Debug)]
 pub(crate) struct ConnHandler {
-    mapping: Mapping,
+    mapping: Arc<Mapping>,
     conn: Connection,
-    report_path: String,
 }
 
 #[derive(Debug)]
 pub enum MessageError {
-    /// Not enough data is available to parse a message
-    Incomplete,
+    /// Peer closed the connection before the expected message arrived
+    Closed,
 
     /// Messages do not match
     NotEqual,
 
-    /// Error in buffer
-    BufferError,
+    /// Expected message did not arrive in time
+    Timeout,
 
-    /// Invalid message encoding
-    Other(anyhow::Error),
+    /// Error reading from or writing to the socket
+    Io(io::Error),
 }
 
 impl Connection {
@@ -51,142 +50,179 @@ impl Connection {
         }
     }
 
-    /// Receives a message from the stream and checks if match with the one expected.
-    pub async fn recv(&mut self, expected_message: &Bytes) -> Result<Option<usize>, MessageError> {
+    /// Reads from the stream until `expected` is received, failing as soon as
+    /// the received bytes diverge from it.
+    pub async fn recv(&mut self, expected: &[u8]) -> Result<(), MessageError> {
         loop {
-            if let Some(len) = self.check_recv(expected_message)? {
-                return Ok(Some(len));
+            let received = &self.buffer[..self.buffer.len().min(expected.len())];
+            debug!("expected: {:?}\tbuffer: {:?}", expected, received);
+
+            if !expected.starts_with(received) {
+                return Err(MessageError::NotEqual);
+            }
+            if received.len() == expected.len() {
+                self.buffer.advance(expected.len());
+                return Ok(());
             }
 
-            if 0 == self
-                .stream
-                .read_buf(&mut self.buffer)
-                .await
-                .map_err(|_| MessageError::BufferError)?
-            {
-                if self.buffer.is_empty() {
-                    return Ok(None);
-                } else {
-                    return Err(MessageError::Other(anyhow!("connection reset by peer")));
-                }
+            if self.stream.read_buf(&mut self.buffer).await? == 0 {
+                return Err(MessageError::Closed);
             }
         }
-    }
-
-    fn check_recv(&mut self, expected_message: &Bytes) -> Result<Option<usize>, MessageError> {
-        let buf_cursor = Cursor::new(&self.buffer[..]);
-
-        let expected_len = expected_message.len();
-        let buf_len = buf_cursor.get_ref().len();
-
-        let recv = Bytes::copy_from_slice(&buf_cursor.get_ref()[..buf_len]);
-
-        if buf_len < expected_len {
-            return Ok(None);
-        }
-        debug!("expected: {:?}\tbuffer: {:?}", expected_message, recv);
-
-        if *expected_message == recv.slice(..expected_len) {
-            self.buffer = self.buffer.split_off(expected_len);
-            return Ok(Some(expected_len));
-        }
-
-        Err(MessageError::NotEqual)
     }
 
     /// Sends message to the stream.
-    pub async fn send(&mut self, msg_name: &String, msg: &Bytes) -> Result<(), MessageError> {
-        self.write_message(msg)
-            .await
-            .map_err(|_| MessageError::BufferError)?;
+    pub async fn send(&mut self, msg_name: &str, msg: &Bytes) -> Result<(), MessageError> {
+        self.stream.write_all(msg).await?;
+        self.stream.flush().await?;
         info!("send '{:}': {:#?}", msg_name, msg);
 
         Ok(())
     }
-
-    pub async fn write_message(&mut self, message: &Bytes) -> io::Result<()> {
-        self.stream.write_all(message).await?;
-        self.stream.flush().await
-    }
 }
 
 impl ConnHandler {
-    pub fn new(mapping: Mapping, socket: TcpStream, report_path: String) -> ConnHandler {
+    pub fn new(mapping: Arc<Mapping>, socket: TcpStream) -> ConnHandler {
         ConnHandler {
             mapping,
             conn: Connection::new(socket),
-            report_path,
         }
     }
 
-    pub async fn run(&mut self, notify: Arc<Notify>) -> Result<(), MessageError> {
-        let mapping = self.mapping.state.try_read().unwrap();
+    /// Executes the mapped actions in order, stopping at the first failure or when
+    /// `shutdown` is cancelled. Remaining `Recv` actions are reported as skipped and
+    /// a remaining `Shutdown` still takes effect after its `wait_for`, so a failed run
+    /// never leaves the server hanging nor cuts other connections short.
+    /// Returns this connection's results.
+    pub async fn run(&mut self, shutdown: CancellationToken) -> TestSuite {
+        let conn = &mut self.conn;
+        let mapping = &self.mapping;
 
-        let mut reporter = Reporter::new(&mapping.mapping_name);
+        let mut reporter = Reporter::new(&mapping.name);
+        let mut actions = mapping.actions.iter();
+        // Delay before signalling shutdown, once a `Shutdown` action is reached
+        let mut shutdown_after: Option<u64> = None;
 
-        for next_action in &mapping.message_actions {
-            let MessageAction {
-                message,
-                execute,
-                wait_for,
-            } = next_action;
-            let msg_value = &mapping.name_to_message[message];
-
-            let start_action = Instant::now();
-
-            if *wait_for != 0 {
-                info!("waiting for {} seconds", *wait_for);
-                sleep(Duration::from_secs(*wait_for)).await;
-            }
-
-            match execute {
-                Action::Shutdown => {
-                    info!("notifying shutdown");
-                    notify.notify_waiters()
+        for MessageAction { execute, wait_for } in actions.by_ref() {
+            let step = async {
+                if *wait_for != 0 {
+                    info!("waiting for {} seconds", wait_for);
+                    time::sleep(Duration::from_secs(*wait_for)).await;
                 }
-                Action::Send => self.conn.send(message, msg_value).await?,
-                Action::Recv => {
-                    match self.conn.recv(msg_value).await {
-                        Ok(Some(_)) => {
-                            info!("message '{:}' was recv correctly", message);
-                            reporter.sucess(message, start_action.elapsed());
-                        }
-                        Ok(None) => {
-                            error!("message '{:}' was not recv correctly", message);
-                            reporter.failure(
-                                message,
-                                start_action.elapsed(),
-                                "recv_error",
-                                "message not recv correctly",
-                            );
-                        }
-                        Err(e) => {
-                            error!("{:}", e);
-                            reporter.error(
-                                message,
-                                start_action.elapsed(),
-                                "message_error",
-                                format!("{:}", e).as_str(),
-                            );
-                        }
-                    };
-                }
-                Action::Unknown => unimplemented!(),
+                let start = Instant::now();
+                let result = perform(conn, mapping, execute).await;
+                (result, start.elapsed())
             };
-        }
-        reporter.report(self.report_path.as_str());
 
-        Ok(())
+            let (result, elapsed) = tokio::select! {
+                _ = shutdown.cancelled() => {
+                    info!("server shutting down, aborting remaining actions");
+                    if let Action::Recv { message, .. } = execute {
+                        reporter.skipped(message);
+                    }
+                    break;
+                }
+                outcome = step => outcome,
+            };
+
+            match (execute, result) {
+                (Action::Shutdown, _) => {
+                    // Its wait_for already elapsed as part of the step
+                    shutdown_after = Some(0);
+                    break;
+                }
+                (Action::Send { .. }, Ok(())) => {}
+                (Action::Recv { message, .. }, Ok(())) => {
+                    info!("message '{:}' was recv correctly", message);
+                    reporter.success(message, elapsed);
+                }
+                (Action::Send { message }, Err(err)) => {
+                    error!("failed to send '{:}': {:}", message, err);
+                    reporter.error(message, elapsed, "send_error", &err.to_string());
+                    break;
+                }
+                (Action::Recv { message, .. }, Err(MessageError::Io(err))) => {
+                    error!("failed to recv '{:}': {:}", message, err);
+                    reporter.error(message, elapsed, "recv_error", &err.to_string());
+                    break;
+                }
+                (Action::Recv { message, .. }, Err(err)) => {
+                    error!("message '{:}' was not recv correctly: {:}", message, err);
+                    reporter.failure(message, elapsed, err.kind(), &err.to_string());
+                    break;
+                }
+            }
+        }
+
+        for MessageAction { execute, wait_for } in actions {
+            match execute {
+                Action::Recv { message, .. } => reporter.skipped(message),
+                Action::Shutdown => {
+                    shutdown_after.get_or_insert(*wait_for);
+                }
+                Action::Send { .. } => {}
+            }
+        }
+
+        if let Some(wait_for) = shutdown_after {
+            if wait_for != 0 {
+                info!("shutting down in {} seconds", wait_for);
+            }
+            tokio::select! {
+                _ = shutdown.cancelled() => {}
+                _ = time::sleep(Duration::from_secs(wait_for)) => {
+                    info!("notifying shutdown");
+                    shutdown.cancel();
+                }
+            }
+        }
+
+        reporter.into_suite()
+    }
+}
+
+async fn perform(
+    conn: &mut Connection,
+    mapping: &Mapping,
+    action: &Action,
+) -> Result<(), MessageError> {
+    match action {
+        Action::Send { message } => conn.send(message, &mapping.messages[message]).await,
+        Action::Recv { message, timeout } => {
+            let expected = &mapping.messages[message];
+            time::timeout(Duration::from_secs(*timeout), conn.recv(expected))
+                .await
+                .map_err(|_| MessageError::Timeout)?
+        }
+        Action::Shutdown => Ok(()),
+    }
+}
+
+impl MessageError {
+    /// Short identifier used as the failure type in reports
+    fn kind(&self) -> &'static str {
+        match self {
+            MessageError::Closed => "connection_closed",
+            MessageError::NotEqual => "message_mismatch",
+            MessageError::Timeout => "timeout",
+            MessageError::Io(_) => "io_error",
+        }
+    }
+}
+
+impl From<io::Error> for MessageError {
+    fn from(err: io::Error) -> Self {
+        MessageError::Io(err)
     }
 }
 
 impl fmt::Display for MessageError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            MessageError::Incomplete => "incomplete message in stream".fmt(fmt),
+            MessageError::Closed => "connection closed by peer".fmt(fmt),
             MessageError::NotEqual => "messages do not match".fmt(fmt),
-            MessageError::BufferError => "error in reading or writing to buffer".fmt(fmt),
-            MessageError::Other(err) => err.fmt(fmt),
+            MessageError::Timeout => "timed out waiting for message".fmt(fmt),
+            MessageError::Io(err) => err.fmt(fmt),
         }
     }
 }

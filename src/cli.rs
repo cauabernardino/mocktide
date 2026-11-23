@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{num::NonZeroUsize, path::PathBuf};
 
 use clap::Parser;
 
@@ -24,4 +24,8 @@ pub struct Cli {
     /// JUnit report path
     #[arg(short, long, default_value = "result.xml")]
     pub report: PathBuf,
+
+    /// Maximum number of connections served at the same time
+    #[arg(long, default_value = "10")]
+    pub max_connections: NonZeroUsize,
 }

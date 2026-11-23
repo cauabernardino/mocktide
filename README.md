@@ -10,8 +10,10 @@ Main workflow:
 - Run your client binding to server port
   - Server will validate expected received messages
 - Check server logs and result file
-  - Result file is in JUnit XML format,
-    - The name in mapping file is considered the test suite
+  - Result file is in JUnit XML format, written once the server stops
+    (`Shutdown` action, Ctrl-C or SIGTERM)
+    - Each connection is a test suite named after the mapping; with several
+      connections they are numbered, e.g. `My test (connection 2)`
     - Each `Recv` action is a test case
 
 
@@ -33,6 +35,16 @@ $ cargo run -- -v -r path/to/test.xml examples/sbe.yaml
 $ python3 examples/client_sbe.py
 ```
 
+Several clients against one server, collected in a single report with one test
+suite per connection:
+```bash
+$ cargo run -- examples/multi.yaml
+
+# In another terminal: 3 clients, or 5 where client 2 sends a wrong message
+$ python3 examples/client_multi.py
+$ python3 examples/client_multi.py -n 5 --wrong 2
+```
+
 ## Mapping file
 Mapping file basic structure
 ```yaml
@@ -41,6 +53,8 @@ name: My test
 
 # Mapping of messages to be handled by the server, either to be sent or received
 # name: value (text or binary repr)
+# Each character is one byte: "\xNN" is the byte NN, so "\x80" is 0x80, not its
+# UTF-8 encoding. Characters above "\xFF" are rejected.
 messages:
   first_msg: "\x01\x02\x03\x04"
   second_msg: "\x04\x03\x02\x01"
@@ -55,6 +69,7 @@ actions:
     wait_for: 2  # You can set a waiting time for an action, in seconds
   - execute: Recv
     message: third_msg
+    timeout: 5  # How long a Recv waits for its message, in seconds (default: 30)
   - execute: Recv
     message: third_msg
   - execute: Shutdown
@@ -64,6 +79,10 @@ Actions:
   - Send => server will send the mapped message
   - Recv => server will wait for the mapped message and validate it
   - Shutdown => server will shutdown, will not require a mapped message
+
+Actions stop at the first failure (mismatch, timeout or closed connection). Any
+remaining `Recv` is reported as skipped, and a remaining `Shutdown` still stops the
+server, so a failed run never leaves it hanging.
 
 ## Roadmap
 
