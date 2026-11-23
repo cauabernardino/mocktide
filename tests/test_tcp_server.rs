@@ -93,7 +93,8 @@ async fn test_tcp_server_completes_expected_actions() {
     assert_eq!(Bytes::copy_from_slice(&reply), Bytes::from_static(b"OK\x80\xFF"));
 
     let report = server.finished_report().await;
-    assert!(report.contains(r#"<testsuite id="0" name="hello""#), "{report}");
+    assert!(report.contains(r#"
+  <testsuite id="0" name="hello""#), "{report}");
     assert!(report.contains(r#"<testcase name="msg1""#), "{report}");
     assert!(!report.contains("<failure"), "{report}");
 }

@@ -27,6 +27,7 @@ clap = { version = "4.6", features = ["derive"] }
 junit-report = "0.9"
 tokio-util = { version = "0.7.20", features = ["rt"] }
 serde_yaml_ng = "0.10"
+quick-xml = "0.41"
 
 [dev-dependencies]
 tempfile = "3.27"

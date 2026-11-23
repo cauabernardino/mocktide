@@ -1,6 +1,9 @@
 use junit_report::Duration as JUnitDuration;
 use junit_report::{ReportBuilder, TestCaseBuilder, TestSuite, TestSuiteBuilder};
+use quick_xml::events::{BytesText, Event};
+use quick_xml::{Reader, Writer};
 use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::time::Duration;
 
 /// Collects the results of one connection as a JUnit test suite
@@ -59,10 +62,74 @@ pub fn write_report(output_path: &str, mut suites: Vec<TestSuite>) -> crate::Res
     }
 
     let report = ReportBuilder::new().add_testsuites(suites).build();
-    report.write_xml(File::create(output_path)?)?;
+    let mut compact = Vec::new();
+    report.write_xml(&mut compact)?;
+
+    let mut output = BufWriter::new(File::create(output_path)?);
+    indent_xml(&compact, &mut output)?;
+    output.flush()?;
+    Ok(())
+}
+
+/// Re-emits compact XML with two-space indentation. `junit_report` only writes
+/// compact output; text and CDATA are copied as-is, so their content is unchanged.
+fn indent_xml(compact: &[u8], output: impl Write) -> crate::Result<()> {
+    let mut reader = Reader::from_reader(compact);
+    let mut writer = Writer::new_with_indent(output, b' ', 2);
+    // The reader splits text around entity references (`&amp;`). Each run is written
+    // back as one text event, otherwise the writer would indent inside the text.
+    let mut text = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Text(part) => text.extend_from_slice(&part),
+            Event::GeneralRef(entity) => {
+                text.push(b'&');
+                text.extend_from_slice(&entity);
+                text.push(b';');
+            }
+            event => {
+                if !text.is_empty() {
+                    let escaped = String::from_utf8(std::mem::take(&mut text))?;
+                    writer.write_event(Event::Text(BytesText::from_escaped(escaped)))?;
+                }
+                if let Event::Eof = event {
+                    break;
+                }
+                writer.write_event(event)?;
+            }
+        }
+    }
+    writer.get_mut().write_all(b"\n")?;
     Ok(())
 }
 
 fn to_junit(duration: Duration) -> JUnitDuration {
     JUnitDuration::milliseconds(duration.as_millis() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_indent_xml_keeps_content_intact() {
+        let compact = br#"<?xml version="1.0" encoding="utf-8"?><a><b x="1 &amp; 2"/><c>text &lt;here&gt;</c><d><![CDATA[ raw
+ data ]]></d></a>"#;
+
+        let mut indented = Vec::new();
+        indent_xml(compact, &mut indented).unwrap();
+
+        assert_eq!(
+            String::from_utf8(indented).unwrap(),
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<a>
+  <b x="1 &amp; 2"/>
+  <c>text &lt;here&gt;</c>
+  <d><![CDATA[ raw
+ data ]]></d>
+</a>
+"#
+        );
+    }
 }

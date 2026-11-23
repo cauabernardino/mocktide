@@ -387,6 +387,7 @@ dependencies = [
  "env_logger",
  "junit-report",
  "log",
+ "quick-xml",
  "serde",
  "serde_yaml_ng",
  "tempfile",
