@@ -41,6 +41,8 @@ name: My test
 
 # Mapping of messages to be handled by the server, either to be sent or received
 # name: value (text or binary repr)
+# Each character is one byte: "\xNN" is the byte NN, so "\x80" is 0x80, not its
+# UTF-8 encoding. Characters above "\xFF" are rejected.
 messages:
   first_msg: "\x01\x02\x03\x04"
   second_msg: "\x04\x03\x02\x01"

@@ -68,10 +68,10 @@ pub(crate) enum Action {
 }
 
 impl MappingGuard {
-    pub(crate) fn new(config: String) -> MappingGuard {
-        MappingGuard {
-            mapping: Mapping::new(config),
-        }
+    pub(crate) fn new(config_path: &str) -> crate::Result<MappingGuard> {
+        Ok(MappingGuard {
+            mapping: Mapping::new(config_path)?,
+        })
     }
 
     /// Gets underlying mapping, increasing its reference count.
@@ -81,19 +81,20 @@ impl MappingGuard {
 }
 
 impl Mapping {
-    pub(crate) fn new(config: String) -> Mapping {
-        let state = Arc::new(RwLock::new(MappingState::from_file(config).unwrap()));
+    pub(crate) fn new(config_path: &str) -> crate::Result<Mapping> {
+        let state = Arc::new(RwLock::new(MappingState::from_file(config_path)?));
 
-        Mapping { state }
+        Ok(Mapping { state })
     }
 }
 
 impl MappingState {
-    pub fn from_file(config_path: String) -> crate::Result<MappingState> {
-        let file_content = fs::read_to_string(config_path).unwrap();
+    pub fn from_file(config_path: &str) -> crate::Result<MappingState> {
+        let file_content = fs::read_to_string(config_path)
+            .with_context(|| format!("could not read mapping file '{config_path}'"))?;
 
-        let parsed: MappingFile = serde_yaml::from_str(file_content.as_str())
-            .with_context(|| "error parsing the mapping file")?;
+        let parsed: MappingFile = serde_yaml_ng::from_str(&file_content)
+            .with_context(|| format!("error parsing mapping file '{config_path}'"))?;
 
         let mut name_to_message: HashMap<String, Bytes> = HashMap::new();
 
@@ -144,8 +145,15 @@ impl<'de> Deserialize<'de> for MappingFile {
         }
 
         let mut messages = HashMap::new();
-        for (k, v) in helper.messages {
-            messages.insert(k, Bytes::from(v));
+        for (name, value) in helper.messages {
+            let bytes = to_bytes(&value).map_err(|c| {
+                de::Error::custom(format!(
+                    "message '{name}' contains '{c}' (U+{:04X}), which does not fit in a byte; \
+                     write binary data as \\xNN escapes",
+                    c as u32
+                ))
+            })?;
+            messages.insert(name, bytes);
         }
         // To not complicate even more the flow of ConnHandler,
         // a null byte mapping for shutdown action
@@ -157,6 +165,16 @@ impl<'de> Deserialize<'de> for MappingFile {
             actions: helper.actions,
         })
     }
+}
+
+/// Maps each character to the byte with the same value, so a YAML `"\x80"` is the
+/// byte 0x80 rather than its UTF-8 encoding. Returns the first character above U+00FF.
+fn to_bytes(value: &str) -> Result<Bytes, char> {
+    value
+        .chars()
+        .map(|c| u8::try_from(c).map_err(|_| c))
+        .collect::<Result<Vec<u8>, char>>()
+        .map(Bytes::from)
 }
 
 impl PartialEq for Action {
@@ -210,8 +228,44 @@ mod tests {
     "#;
 
     #[test]
+    fn test_escapes_above_ascii_map_to_single_bytes() {
+        let parsed: MappingFile = serde_yaml_ng::from_str(
+            r#"
+            name: bytes
+            messages:
+                binary: "\x00\x7F\x80\xFF"
+                text: "+hello"
+            actions:
+                - message: binary
+                  execute: Send
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.messages["binary"][..], [0x00, 0x7F, 0x80, 0xFF]);
+        assert_eq!(parsed.messages["text"][..], *b"+hello");
+    }
+
+    #[test]
+    fn test_characters_that_do_not_fit_a_byte_are_rejected() {
+        let parsed: Result<MappingFile, serde_yaml_ng::Error> = serde_yaml_ng::from_str(
+            r#"
+            name: euro
+            messages:
+                price: "10\u20AC"
+            actions:
+                - message: price
+                  execute: Send
+            "#,
+        );
+
+        let err = parsed.unwrap_err().to_string();
+        assert!(err.contains("price"), "{err}");
+    }
+
+    #[test]
     fn test_yaml_file_is_correctly_deserialized() {
-        let parsed: Result<MappingFile, serde_yaml::Error> = serde_yaml::from_str(MAPPING_YAML);
+        let parsed: Result<MappingFile, serde_yaml_ng::Error> = serde_yaml_ng::from_str(MAPPING_YAML);
 
         assert_ok!(parsed);
     }
@@ -229,16 +283,16 @@ mod tests {
 
     #[test]
     fn test_yaml_file_fails_to_deserialize_action_with_unknown_msg() {
-        let parsed: Result<MappingFile, serde_yaml::Error> =
-            serde_yaml::from_str(MAPPING_UNKNOWN_MSG_YAML);
+        let parsed: Result<MappingFile, serde_yaml_ng::Error> =
+            serde_yaml_ng::from_str(MAPPING_UNKNOWN_MSG_YAML);
 
         assert_err!(parsed);
     }
 
     #[test]
     fn test_yaml_file_fails_to_serialize_action_without_a_mapped_msg() {
-        let parsed: Result<MappingFile, serde_yaml::Error> =
-            serde_yaml::from_str(MAPPING_WRONG_YAML);
+        let parsed: Result<MappingFile, serde_yaml_ng::Error> =
+            serde_yaml_ng::from_str(MAPPING_WRONG_YAML);
 
         assert_err!(parsed);
     }

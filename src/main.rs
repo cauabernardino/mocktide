@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use env_logger::{Builder, Env};
 use log::info;
@@ -21,16 +21,10 @@ async fn main() -> Result<()> {
     .try_init()
     .with_context(|| "logger could not be initialized: {:#?}")?;
 
-    if !args.mapping_file.exists() {
-        return Err(anyhow!("file {:#?} does not exist", args.mapping_file));
-    }
-
     let address = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&address)
         .await
         .with_context(|| format!("error binding to {}", address))?;
-
-    info!("server will start in address {}", address);
 
     let shutdown = CancellationToken::new();
 
@@ -48,7 +42,7 @@ async fn main() -> Result<()> {
         shutdown,
     };
 
-    run_tcp_server(listener, config).await;
+    run_tcp_server(listener, config).await?;
     info!("server stopped");
 
     Ok(())

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use log::{debug, error, info};
+use log::{debug, info};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Semaphore,
@@ -24,20 +24,21 @@ pub struct TcpServer {
 }
 
 impl TcpServer {
-    pub fn new(listener: TcpListener, config: ServerConfig) -> TcpServer {
-        TcpServer {
-            mapping_guard: MappingGuard::new(config.mapping_file_path.clone()),
+    /// Fails if the mapping file cannot be read or is invalid.
+    pub fn new(listener: TcpListener, config: ServerConfig) -> crate::Result<TcpServer> {
+        Ok(TcpServer {
+            mapping_guard: MappingGuard::new(&config.mapping_file_path)?,
             listener,
             limit_conns: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
             connections: TaskTracker::new(),
             config,
-        }
+        })
     }
 
     /// Accepts connections until shutdown, then waits for in-flight connections
     /// to finish writing their reports.
     pub async fn run(&self) -> crate::Result<()> {
-        info!("accepting connections");
+        info!("accepting connections on {}", self.listener.local_addr()?);
 
         let result = tokio::select! {
             _ = self.config.shutdown.cancelled() => Ok(()),
@@ -98,10 +99,6 @@ impl TcpServer {
 
 /// Entry point for running the TCP server. Returns once shutdown is requested
 /// and all connections have finished.
-pub async fn run_tcp_server(listener: TcpListener, config: ServerConfig) {
-    let server = TcpServer::new(listener, config);
-
-    if let Err(err) = server.run().await {
-        error!("{}", err);
-    }
+pub async fn run_tcp_server(listener: TcpListener, config: ServerConfig) -> crate::Result<()> {
+    TcpServer::new(listener, config)?.run().await
 }

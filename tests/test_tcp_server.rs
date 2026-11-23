@@ -15,7 +15,7 @@ const HELLO: &[u8] = b"\x48\x65\x6C\x6C\x6F";
 struct TestServer {
     port: u16,
     shutdown: CancellationToken,
-    handle: JoinHandle<()>,
+    handle: JoinHandle<mocktide::Result<()>>,
     report: TempPath,
     _mapping: TempPath,
 }
@@ -58,7 +58,8 @@ impl TestServer {
         timeout(Duration::from_secs(5), self.handle)
             .await
             .expect("server did not shut down")
-            .unwrap();
+            .unwrap()
+            .expect("server returned an error");
         assert!(self.shutdown.is_cancelled());
 
         std::fs::read_to_string(&self.report).unwrap()
@@ -72,7 +73,7 @@ async fn test_tcp_server_completes_expected_actions() {
         name: hello
         messages:
             msg1: "\x48\x65\x6C\x6C\x6F"
-            reply: "\x4F\x4B"
+            reply: "\x4F\x4B\x80\xFF"
         actions:
             - message: msg1
               execute: Recv
@@ -85,9 +86,9 @@ async fn test_tcp_server_completes_expected_actions() {
 
     let mut client = server.connect().await;
     client.write_all(HELLO).await.unwrap();
-    let mut reply = [0u8; 2];
+    let mut reply = [0u8; 4];
     client.read_exact(&mut reply).await.unwrap();
-    assert_eq!(Bytes::copy_from_slice(&reply), Bytes::from_static(b"OK"));
+    assert_eq!(Bytes::copy_from_slice(&reply), Bytes::from_static(b"OK\x80\xFF"));
 
     let report = server.finished_report().await;
     assert!(report.contains(r#"<testcase name="msg1""#), "{report}");
@@ -185,4 +186,26 @@ async fn test_external_shutdown_aborts_pending_connection() {
 
     let report = server.finished_report().await;
     assert!(report.contains("<skipped"), "{report}");
+}
+
+#[tokio::test]
+async fn test_invalid_mapping_is_returned_as_error() {
+    let server = TestServer::start(
+        r#"
+        name: invalid
+        messages:
+            msg1: "\x48\x65\x6C\x6C\x6F"
+        actions:
+            - message: missing
+              execute: Recv
+        "#,
+    )
+    .await;
+
+    let err = timeout(Duration::from_secs(5), server.handle)
+        .await
+        .expect("server did not stop")
+        .unwrap()
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("missing"), "{err:#}");
 }
