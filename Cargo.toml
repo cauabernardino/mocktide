@@ -17,22 +17,19 @@ path = "src/main.rs"
 name = "mocktide"
 
 [dependencies]
-tokio = { version = "1.43", features = ["full"]}
-log = "0.4"
-env_logger = "0.11"
-anyhow= "1.0.95"
-bytes = "1.10"
-serde = { version = "1", features = ["derive"] }
+tokio = { version = "1.54", features = ["full"] }
+log = "0.4.35"
+env_logger = "0.11.12"
+anyhow = "1.0.105"
+bytes = "1.12"
+serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9"
-serde_bytes = "0.11"
-base64 = "0.22"
-clap = { version = "4.5", features = ["derive"] }
-junit-report = "0.8"
-tokio-util = { version = "0.7", features = ["rt"] }
+clap = { version = "4.6", features = ["derive"] }
+junit-report = "0.9"
+tokio-util = { version = "0.7.20", features = ["rt"] }
 
 [dev-dependencies]
-tempfile = "3"
-env_logger = "0.11"
+tempfile = "3.27"
 claims = "0.8"
 
 [profile.release]
