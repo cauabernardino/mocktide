@@ -244,3 +244,38 @@ async fn test_invalid_mapping_is_returned_as_error() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("missing"), "{err:#}");
 }
+
+#[tokio::test]
+async fn test_failed_connection_waits_before_shutdown() {
+    let server = TestServer::start(
+        r#"
+        name: grace
+        messages:
+            msg1: "\x48\x65\x6C\x6C\x6F"
+            reply: "\x4F\x4B"
+        actions:
+            - message: msg1
+              execute: Recv
+            - message: reply
+              execute: Send
+            - execute: Shutdown
+              wait_for: 1
+        "#,
+    )
+    .await;
+
+    // The first connection fails right away; its pending Shutdown must still
+    // honour wait_for, giving the second connection time to finish.
+    let mut failing = server.connect().await;
+    failing.write_all(b"X").await.unwrap();
+
+    let mut client = server.connect().await;
+    client.write_all(HELLO).await.unwrap();
+    let mut reply = [0u8; 2];
+    client.read_exact(&mut reply).await.unwrap();
+
+    let report = server.finished_report().await;
+    assert!(report.contains(r#"type="message_mismatch""#), "{report}");
+    assert!(!report.contains("<skipped"), "{report}");
+    assert_eq!(report.matches("<testcase").count(), 2, "{report}");
+}

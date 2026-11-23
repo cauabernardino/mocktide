@@ -91,15 +91,17 @@ impl ConnHandler {
 
     /// Executes the mapped actions in order, stopping at the first failure or when
     /// `shutdown` is cancelled. Remaining `Recv` actions are reported as skipped and
-    /// a remaining `Shutdown` still takes effect, so a failed run never leaves the
-    /// server hanging. Returns this connection's results.
+    /// a remaining `Shutdown` still takes effect after its `wait_for`, so a failed run
+    /// never leaves the server hanging nor cuts other connections short.
+    /// Returns this connection's results.
     pub async fn run(&mut self, shutdown: CancellationToken) -> TestSuite {
         let conn = &mut self.conn;
         let mapping = &self.mapping;
 
         let mut reporter = Reporter::new(&mapping.name);
         let mut actions = mapping.actions.iter();
-        let mut shutdown_requested = false;
+        // Delay before signalling shutdown, once a `Shutdown` action is reached
+        let mut shutdown_after: Option<u64> = None;
 
         for MessageAction { execute, wait_for } in actions.by_ref() {
             let step = async {
@@ -125,7 +127,8 @@ impl ConnHandler {
 
             match (execute, result) {
                 (Action::Shutdown, _) => {
-                    shutdown_requested = true;
+                    // Its wait_for already elapsed as part of the step
+                    shutdown_after = Some(0);
                     break;
                 }
                 (Action::Send { .. }, Ok(())) => {}
@@ -151,17 +154,27 @@ impl ConnHandler {
             }
         }
 
-        for MessageAction { execute, .. } in actions {
+        for MessageAction { execute, wait_for } in actions {
             match execute {
                 Action::Recv { message, .. } => reporter.skipped(message),
-                Action::Shutdown => shutdown_requested = true,
+                Action::Shutdown => {
+                    shutdown_after.get_or_insert(*wait_for);
+                }
                 Action::Send { .. } => {}
             }
         }
 
-        if shutdown_requested {
-            info!("notifying shutdown");
-            shutdown.cancel();
+        if let Some(wait_for) = shutdown_after {
+            if wait_for != 0 {
+                info!("shutting down in {} seconds", wait_for);
+            }
+            tokio::select! {
+                _ = shutdown.cancelled() => {}
+                _ = time::sleep(Duration::from_secs(wait_for)) => {
+                    info!("notifying shutdown");
+                    shutdown.cancel();
+                }
+            }
         }
 
         reporter.into_suite()
