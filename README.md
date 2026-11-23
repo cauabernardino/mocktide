@@ -35,6 +35,16 @@ $ cargo run -- -v -r path/to/test.xml examples/sbe.yaml
 $ python3 examples/client_sbe.py
 ```
 
+Several clients against one server, collected in a single report with one test
+suite per connection:
+```bash
+$ cargo run -- examples/multi.yaml
+
+# In another terminal: 3 clients, or 5 where client 2 sends a wrong message
+$ python3 examples/client_multi.py
+$ python3 examples/client_multi.py -n 5 --wrong 2
+```
+
 ## Mapping file
 Mapping file basic structure
 ```yaml
