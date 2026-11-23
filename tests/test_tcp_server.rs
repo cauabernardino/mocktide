@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -36,6 +37,7 @@ impl TestServer {
         let config = ServerConfig {
             mapping_file_path: mapping.to_string_lossy().to_string(),
             report_path: report.to_string_lossy().to_string(),
+            max_connections: NonZeroUsize::new(10).unwrap(),
             shutdown: shutdown.clone(),
         };
         let handle = tokio::spawn(run_tcp_server(listener, config));
@@ -91,7 +93,40 @@ async fn test_tcp_server_completes_expected_actions() {
     assert_eq!(Bytes::copy_from_slice(&reply), Bytes::from_static(b"OK\x80\xFF"));
 
     let report = server.finished_report().await;
+    assert!(report.contains(r#"<testsuite id="0" name="hello""#), "{report}");
     assert!(report.contains(r#"<testcase name="msg1""#), "{report}");
+    assert!(!report.contains("<failure"), "{report}");
+}
+
+#[tokio::test]
+async fn test_each_connection_gets_its_own_suite_in_one_report() {
+    let server = TestServer::start(
+        r#"
+        name: hello
+        messages:
+            msg1: "\x48\x65\x6C\x6C\x6F"
+            reply: "\x4F\x4B"
+        actions:
+            - message: msg1
+              execute: Recv
+            - message: reply
+              execute: Send
+        "#,
+    )
+    .await;
+
+    for _ in 0..2 {
+        let mut client = server.connect().await;
+        client.write_all(HELLO).await.unwrap();
+        let mut reply = [0u8; 2];
+        client.read_exact(&mut reply).await.unwrap();
+    }
+    server.shutdown.cancel();
+
+    let report = server.finished_report().await;
+    assert!(report.contains(r#"name="hello (connection 1)""#), "{report}");
+    assert!(report.contains(r#"name="hello (connection 2)""#), "{report}");
+    assert_eq!(report.matches("<testcase").count(), 2, "{report}");
     assert!(!report.contains("<failure"), "{report}");
 }
 

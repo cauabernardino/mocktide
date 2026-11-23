@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
         2..=u8::MAX => "debug", // TODO: Tracing
     }))
     .try_init()
-    .with_context(|| "logger could not be initialized: {:#?}")?;
+    .context("logger could not be initialized")?;
 
     let address = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&address)
@@ -30,15 +30,15 @@ async fn main() -> Result<()> {
 
     let interrupt = shutdown.clone();
     tokio::spawn(async move {
-        if signal::ctrl_c().await.is_ok() {
-            info!("server interrupted");
-            interrupt.cancel();
-        }
+        interrupted().await;
+        info!("server interrupted");
+        interrupt.cancel();
     });
 
     let config = ServerConfig {
         mapping_file_path: args.mapping_file.to_string_lossy().to_string(),
         report_path: args.report.to_string_lossy().to_string(),
+        max_connections: args.max_connections,
         shutdown,
     };
 
@@ -46,4 +46,27 @@ async fn main() -> Result<()> {
     info!("server stopped");
 
     Ok(())
+}
+
+/// Resolves on Ctrl-C, or on SIGTERM on Unix, which is what `kill`, `timeout`,
+/// Docker and CI runners send.
+async fn interrupted() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut terminate =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            Ok(()) = signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        if signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }

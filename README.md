@@ -10,8 +10,10 @@ Main workflow:
 - Run your client binding to server port
   - Server will validate expected received messages
 - Check server logs and result file
-  - Result file is in JUnit XML format,
-    - The name in mapping file is considered the test suite
+  - Result file is in JUnit XML format, written once the server stops
+    (`Shutdown` action, Ctrl-C or SIGTERM)
+    - Each connection is a test suite named after the mapping; with several
+      connections they are numbered, e.g. `My test (connection 2)`
     - Each `Recv` action is a test case
 
 

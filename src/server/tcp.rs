@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use junit_report::TestSuite;
 use log::{debug, info};
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -8,18 +9,18 @@ use tokio::{
 };
 use tokio_util::task::TaskTracker;
 
-use crate::{connection::ConnHandler, mapping::MappingGuard};
+use crate::{connection::ConnHandler, mapping::Mapping, reporter};
 
 use super::ServerConfig;
 
-const MAX_CONNECTIONS: usize = 10;
-
 #[derive(Debug)]
 pub struct TcpServer {
-    mapping_guard: MappingGuard,
+    mapping: Arc<Mapping>,
     listener: TcpListener,
     limit_conns: Arc<Semaphore>,
     connections: TaskTracker,
+    /// Finished connection suites, keyed by accept order
+    suites: Arc<Mutex<Vec<(usize, TestSuite)>>>,
     config: ServerConfig,
 }
 
@@ -27,16 +28,17 @@ impl TcpServer {
     /// Fails if the mapping file cannot be read or is invalid.
     pub fn new(listener: TcpListener, config: ServerConfig) -> crate::Result<TcpServer> {
         Ok(TcpServer {
-            mapping_guard: MappingGuard::new(&config.mapping_file_path)?,
+            mapping: Arc::new(Mapping::from_file(&config.mapping_file_path)?),
             listener,
-            limit_conns: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+            limit_conns: Arc::new(Semaphore::new(config.max_connections.get())),
             connections: TaskTracker::new(),
+            suites: Arc::default(),
             config,
         })
     }
 
-    /// Accepts connections until shutdown, then waits for in-flight connections
-    /// to finish writing their reports.
+    /// Accepts connections until shutdown, waits for in-flight connections to
+    /// finish, then writes the report with every connection's results.
     pub async fn run(&self) -> crate::Result<()> {
         info!("accepting connections on {}", self.listener.local_addr()?);
 
@@ -48,10 +50,12 @@ impl TcpServer {
         self.connections.close();
         self.connections.wait().await;
 
-        result
+        let report = self.write_report();
+        result.and(report)
     }
 
     async fn accept_loop(&self) -> crate::Result<()> {
+        let mut next_index = 0;
         loop {
             let permit = self
                 .limit_conns
@@ -61,15 +65,16 @@ impl TcpServer {
                 .expect("semaphore is never closed");
             let socket = self.accept().await?;
 
-            let mut handler = ConnHandler::new(
-                self.mapping_guard.mapping(),
-                socket,
-                self.config.report_path.clone(),
-            );
+            let index = next_index;
+            next_index += 1;
+
+            let mut handler = ConnHandler::new(self.mapping.clone(), socket);
             let shutdown = self.config.shutdown.clone();
+            let suites = self.suites.clone();
 
             self.connections.spawn(async move {
-                handler.run(shutdown).await;
+                let suite = handler.run(shutdown).await;
+                suites.lock().unwrap().push((index, suite));
                 drop(permit);
             });
         }
@@ -80,8 +85,8 @@ impl TcpServer {
 
         loop {
             match self.listener.accept().await {
-                Ok((socket, _)) => {
-                    debug!("connected: {:?}", socket.peer_addr()?);
+                Ok((socket, peer)) => {
+                    debug!("connected: {peer}");
                     return Ok(socket);
                 }
                 Err(err) => {
@@ -95,10 +100,19 @@ impl TcpServer {
             backoff *= 2;
         }
     }
+
+    fn write_report(&self) -> crate::Result<()> {
+        let mut finished = std::mem::take(&mut *self.suites.lock().unwrap());
+        finished.sort_by_key(|(index, _)| *index);
+        let suites = finished.into_iter().map(|(_, suite)| suite).collect();
+
+        info!("writing report to '{}'", self.config.report_path);
+        reporter::write_report(&self.config.report_path, suites)
+    }
 }
 
-/// Entry point for running the TCP server. Returns once shutdown is requested
-/// and all connections have finished.
+/// Entry point for running the TCP server. Returns once shutdown is requested,
+/// all connections have finished and the report is written.
 pub async fn run_tcp_server(listener: TcpListener, config: ServerConfig) -> crate::Result<()> {
     TcpServer::new(listener, config)?.run().await
 }

@@ -1,7 +1,9 @@
 use bytes::{Buf, Bytes, BytesMut};
+use junit_report::TestSuite;
 use log::{debug, error, info};
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
@@ -21,9 +23,8 @@ pub(crate) struct Connection {
 /// ConnHandler handles a single connection logic
 #[derive(Debug)]
 pub(crate) struct ConnHandler {
-    mapping: Mapping,
+    mapping: Arc<Mapping>,
     conn: Connection,
-    report_path: String,
 }
 
 #[derive(Debug)]
@@ -81,24 +82,23 @@ impl Connection {
 }
 
 impl ConnHandler {
-    pub fn new(mapping: Mapping, socket: TcpStream, report_path: String) -> ConnHandler {
+    pub fn new(mapping: Arc<Mapping>, socket: TcpStream) -> ConnHandler {
         ConnHandler {
             mapping,
             conn: Connection::new(socket),
-            report_path,
         }
     }
 
     /// Executes the mapped actions in order, stopping at the first failure or when
     /// `shutdown` is cancelled. Remaining `Recv` actions are reported as skipped and
     /// a remaining `Shutdown` still takes effect, so a failed run never leaves the
-    /// server hanging. The report is written before shutdown is signalled.
-    pub async fn run(&mut self, shutdown: CancellationToken) {
+    /// server hanging. Returns this connection's results.
+    pub async fn run(&mut self, shutdown: CancellationToken) -> TestSuite {
         let conn = &mut self.conn;
-        let mapping = self.mapping.state.read().await;
+        let mapping = &self.mapping;
 
-        let mut reporter = Reporter::new(&mapping.mapping_name);
-        let mut actions = mapping.message_actions.iter();
+        let mut reporter = Reporter::new(&mapping.name);
+        let mut actions = mapping.actions.iter();
         let mut shutdown_requested = false;
 
         for action in actions.by_ref() {
@@ -112,7 +112,7 @@ impl ConnHandler {
                     time::sleep(Duration::from_secs(action.wait_for)).await;
                 }
                 let start = Instant::now();
-                let result = perform(conn, action, &mapping.name_to_message[message]).await;
+                let result = perform(conn, action, &mapping.messages[message]).await;
                 (result, start.elapsed())
             };
 
@@ -135,7 +135,7 @@ impl ConnHandler {
                 (Action::Send, Ok(())) => {}
                 (Action::Recv, Ok(())) => {
                     info!("message '{:}' was recv correctly", message);
-                    reporter.sucess(message, elapsed);
+                    reporter.success(message, elapsed);
                 }
                 (Action::Send, Err(err)) => {
                     error!("failed to send '{:}': {:}", message, err);
@@ -163,14 +163,12 @@ impl ConnHandler {
             }
         }
 
-        if let Err(err) = reporter.report(&self.report_path) {
-            error!("failed to write report to '{}': {:#}", self.report_path, err);
-        }
-
         if shutdown_requested {
             info!("notifying shutdown");
             shutdown.cancel();
         }
+
+        reporter.into_suite()
     }
 }
 

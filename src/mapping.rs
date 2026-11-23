@@ -2,36 +2,14 @@ use anyhow::Context;
 use bytes::Bytes;
 use log::debug;
 use serde::{de, Deserialize, Deserializer};
-use std::{
-    collections::{HashMap, VecDeque},
-    fs,
-    sync::Arc,
-};
+use std::{collections::HashMap, fs};
 
-use tokio::sync::RwLock;
-
+/// A parsed mapping file: the messages and the actions every connection runs through.
 #[derive(Debug)]
-pub(crate) struct MappingGuard {
-    mapping: Mapping,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct Mapping {
-    pub state: Arc<RwLock<MappingState>>,
-}
-
-#[derive(Debug)]
-pub(crate) struct MappingState {
-    pub mapping_name: String,
-    pub name_to_message: HashMap<String, Bytes>,
-    pub message_actions: VecDeque<MessageAction>,
-}
-
-#[derive(Debug)]
-pub struct MappingFile {
-    name: String,
-    messages: HashMap<String, Bytes>,
-    actions: VecDeque<MessageAction>,
+    pub name: String,
+    pub messages: HashMap<String, Bytes>,
+    pub actions: Vec<MessageAction>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -57,7 +35,7 @@ fn default_recv_timeout() -> u64 {
 }
 
 /// Defines actions the server can perform
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Action {
     /// Send a mapped message
     Send,
@@ -67,52 +45,20 @@ pub(crate) enum Action {
     Shutdown,
 }
 
-impl MappingGuard {
-    pub(crate) fn new(config_path: &str) -> crate::Result<MappingGuard> {
-        Ok(MappingGuard {
-            mapping: Mapping::new(config_path)?,
-        })
-    }
-
-    /// Gets underlying mapping, increasing its reference count.
-    pub(crate) fn mapping(&self) -> Mapping {
-        self.mapping.clone()
-    }
-}
-
 impl Mapping {
-    pub(crate) fn new(config_path: &str) -> crate::Result<Mapping> {
-        let state = Arc::new(RwLock::new(MappingState::from_file(config_path)?));
+    pub fn from_file(path: &str) -> crate::Result<Mapping> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("could not read mapping file '{path}'"))?;
 
-        Ok(Mapping { state })
+        let mapping: Mapping = serde_yaml_ng::from_str(&content)
+            .with_context(|| format!("error parsing mapping file '{path}'"))?;
+
+        debug!("parsed mapping: {:#?}", mapping);
+        Ok(mapping)
     }
 }
 
-impl MappingState {
-    pub fn from_file(config_path: &str) -> crate::Result<MappingState> {
-        let file_content = fs::read_to_string(config_path)
-            .with_context(|| format!("could not read mapping file '{config_path}'"))?;
-
-        let parsed: MappingFile = serde_yaml_ng::from_str(&file_content)
-            .with_context(|| format!("error parsing mapping file '{config_path}'"))?;
-
-        let mut name_to_message: HashMap<String, Bytes> = HashMap::new();
-
-        for (msg_name, msg_value) in &parsed.messages {
-            name_to_message.insert(msg_name.clone(), msg_value.clone());
-            debug!("mapped msg: {:#?}", msg_value);
-        }
-
-        debug!("parsed file: {:?}", parsed);
-        Ok(MappingState {
-            mapping_name: parsed.name,
-            name_to_message,
-            message_actions: parsed.actions,
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for MappingFile {
+impl<'de> Deserialize<'de> for Mapping {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -121,7 +67,7 @@ impl<'de> Deserialize<'de> for MappingFile {
         struct Helper {
             name: String,
             messages: HashMap<String, String>,
-            actions: VecDeque<MessageAction>,
+            actions: Vec<MessageAction>,
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -159,7 +105,7 @@ impl<'de> Deserialize<'de> for MappingFile {
         // a null byte mapping for shutdown action
         messages.insert("".to_string(), Bytes::from("\x00"));
 
-        Ok(MappingFile {
+        Ok(Mapping {
             name: helper.name,
             messages,
             actions: helper.actions,
@@ -175,23 +121,6 @@ fn to_bytes(value: &str) -> Result<Bytes, char> {
         .map(|c| u8::try_from(c).map_err(|_| c))
         .collect::<Result<Vec<u8>, char>>()
         .map(Bytes::from)
-}
-
-impl PartialEq for Action {
-    fn eq(&self, other: &Self) -> bool {
-        matches!(
-            (self, other),
-            (Action::Send, Action::Send)
-                | (Action::Recv, Action::Recv)
-                | (Action::Shutdown, Action::Shutdown),
-        )
-    }
-}
-
-impl PartialEq for MessageAction {
-    fn eq(&self, other: &Self) -> bool {
-        self.message == other.message && self.execute == other.execute
-    }
 }
 
 #[cfg(test)]
@@ -229,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_escapes_above_ascii_map_to_single_bytes() {
-        let parsed: MappingFile = serde_yaml_ng::from_str(
+        let parsed: Mapping = serde_yaml_ng::from_str(
             r#"
             name: bytes
             messages:
@@ -248,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_characters_that_do_not_fit_a_byte_are_rejected() {
-        let parsed: Result<MappingFile, serde_yaml_ng::Error> = serde_yaml_ng::from_str(
+        let parsed: Result<Mapping, serde_yaml_ng::Error> = serde_yaml_ng::from_str(
             r#"
             name: euro
             messages:
@@ -265,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_yaml_file_is_correctly_deserialized() {
-        let parsed: Result<MappingFile, serde_yaml_ng::Error> = serde_yaml_ng::from_str(MAPPING_YAML);
+        let parsed: Result<Mapping, serde_yaml_ng::Error> = serde_yaml_ng::from_str(MAPPING_YAML);
 
         assert_ok!(parsed);
     }
@@ -283,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_yaml_file_fails_to_deserialize_action_with_unknown_msg() {
-        let parsed: Result<MappingFile, serde_yaml_ng::Error> =
+        let parsed: Result<Mapping, serde_yaml_ng::Error> =
             serde_yaml_ng::from_str(MAPPING_UNKNOWN_MSG_YAML);
 
         assert_err!(parsed);
@@ -291,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_yaml_file_fails_to_serialize_action_without_a_mapped_msg() {
-        let parsed: Result<MappingFile, serde_yaml_ng::Error> =
+        let parsed: Result<Mapping, serde_yaml_ng::Error> =
             serde_yaml_ng::from_str(MAPPING_WRONG_YAML);
 
         assert_err!(parsed);
